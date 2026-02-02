@@ -1,11 +1,11 @@
 """
 Seoul Real Estate VFM Search Application
-Final Version 10.5.0 - VFM 범위 조정 및 팝업 UI 수정
+Final Version 11.2.0 - VFM 슬라이더 제거, 등급 선택 간소화
 
 주요 변경:
-- VFM 색상 기준: 0-0.5(빨강), 0.5-1.0(주황), 1.0-2.0(파랑), 2.0+(초록)
-- 팝업 X표시 위치 수정
-- 마커 기본값 500개
+- VFM 범위 슬라이더 제거
+- VFM 등급 선택을 왼쪽 패널에 간단하게 배치
+- 정렬 버그 완전 수정
 """
 
 from modules.data_loader import (
@@ -106,28 +106,6 @@ st.markdown("""
         color: #667eea !important;
     }
     
-    /* 메트릭 카드 */
-    .metric-card {
-        background: white !important;
-        padding: 1.2rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        border-left: 4px solid #667eea;
-        margin-bottom: 1rem;
-    }
-    
-    .metric-label { 
-        color: #6c757d !important; 
-        font-size: 0.9rem; 
-        margin-bottom: 0.3rem;
-    }
-    
-    .metric-value { 
-        color: #212529 !important; 
-        font-size: 1.8rem; 
-        font-weight: 700;
-    }
-    
     /* 버튼 스타일 */
     .stButton > button {
         width: 100%;
@@ -177,6 +155,16 @@ st.markdown("""
         color: #212529 !important;
     }
     
+    /* Checkbox 스타일 */
+    .stCheckbox {
+        padding: 0.2rem 0;
+    }
+    
+    .stCheckbox label {
+        color: #212529 !important;
+        font-size: 0.95rem !important;
+    }
+    
     /* 다운로드 버튼 */
     .stDownloadButton > button {
         background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
@@ -210,6 +198,18 @@ st.markdown("""
     
     /* Warning box 스타일 */
     .stWarning {
+        background-color: white !important;
+        color: #212529 !important;
+    }
+    
+    /* Success box 스타일 */
+    .stSuccess {
+        background-color: white !important;
+        color: #212529 !important;
+    }
+    
+    /* Error box 스타일 */
+    .stError {
         background-color: white !important;
         color: #212529 !important;
     }
@@ -254,9 +254,9 @@ def load_data_simple(contract_type):
         return pd.DataFrame()
 
 
-def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500):
+def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500, sort_order="desc", vfm_grades=None):
     """
-    지도 생성 (VFM 고정 기준 사용)
+    지도 생성 (마커 겹침 방지 - 높은 등급이 위로 표시)
 
     Parameters:
     -----------
@@ -268,17 +268,60 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
         'monthly' 또는 'jeonse'
     marker_limit : int
         마커 최대 표시 개수
+    sort_order : str
+        'desc' (내림차순) 또는 'asc' (오름차순)
+    vfm_grades : list
+        선택된 VFM 등급 리스트 ['excellent', 'good', 'normal', 'low']
     """
+
     m = folium.Map(
         location=[37.5665, 126.9780],
         zoom_start=11,
         tiles='CartoDB positron'
     )
 
+    if df is None or len(df) == 0:
+        folium.Marker(
+            [37.5665, 126.9780],
+            popup="검색 결과가 없습니다",
+            icon=folium.Icon(color='red', icon='info-sign')
+        ).add_to(m)
+        return m
+
+    # ✅ 1단계: 좌표 유효성 검사 & 인덱스 리셋
+    df_valid = df.dropna(subset=['lat', 'lon']).copy()
+    df_valid = df_valid.reset_index(drop=True)
+
+    if len(df_valid) == 0:
+        return m
+
+    # ✅ 2단계: VFM 등급별 필터링
+    if vfm_grades and len(vfm_grades) > 0 and len(vfm_grades) < 4:
+        conditions = []
+
+        if 'excellent' in vfm_grades:
+            conditions.append(df_valid['custom_vfm'] >= 2.0)
+        if 'good' in vfm_grades:
+            conditions.append((df_valid['custom_vfm'] >= 1.0) & (
+                df_valid['custom_vfm'] < 2.0))
+        if 'normal' in vfm_grades:
+            conditions.append((df_valid['custom_vfm'] >= 0.5) & (
+                df_valid['custom_vfm'] < 1.0))
+        if 'low' in vfm_grades:
+            conditions.append(df_valid['custom_vfm'] < 0.5)
+
+        if conditions:
+            combined_condition = conditions[0]
+            for condition in conditions[1:]:
+                combined_condition = combined_condition | condition
+
+            df_valid = df_valid[combined_condition].copy()
+            df_valid = df_valid.reset_index(drop=True)
+
     # VFM 분포 통계
     vfm_stats = {}
-    if df is not None and len(df) > 0:
-        vfm_values = df['custom_vfm'].dropna()
+    if len(df_valid) > 0:
+        vfm_values = df_valid['custom_vfm'].dropna()
         if len(vfm_values) > 0:
             vfm_stats = {
                 'min': vfm_values.min(),
@@ -288,7 +331,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
             }
 
     # 실제 표시할 데이터 개수 계산
-    data_count = len(df) if df is not None and not df.empty else 0
+    data_count = len(df_valid)
 
     if map_type == "marker":
         display_count = min(marker_limit, data_count)
@@ -317,19 +360,36 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
             📊 VFM 지수 범례 ({'월세' if contract_type == 'monthly' else '전세'})
         </div>
         
-        <div style="margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 6px;">
-            <div style="font-size: 11px; color: #666; margin-bottom: 4px;">
-                <strong>🔒 고정 평가 기준</strong>
+        <div style="margin-bottom: 8px; padding: 8px; background: #e8f5e9; border-radius: 6px; border-left: 3px solid #4caf50;">
+            <div style="font-size: 11px; color: #2e7d32; margin-bottom: 4px;">
+                <strong>📐 VFM 계산 방법</strong>
             </div>
-            <div style="font-size: 10px; color: #999;">
-                VFM = 미래가격 / 현재가격<br>
-                서울 전체 기준 절대 평가
+            <div style="font-size: 10px; color: #1b5e20;">
+                VFM = 미래 예상 가격 ÷ 현재 가격<br>
+                (AI 모델 기반 6개월 후 예측)
             </div>
         </div>
     """
 
     if map_type == "marker":
-        legend_html += """
+        sort_label = "높은 순" if sort_order == "desc" else "낮은 순"
+
+        # 선택된 등급 표시
+        selected_grades = []
+        if not vfm_grades or len(vfm_grades) == 4:
+            grade_text = "전체 등급"
+        else:
+            if 'excellent' in vfm_grades:
+                selected_grades.append("⭐최우수")
+            if 'good' in vfm_grades:
+                selected_grades.append("🔵우수")
+            if 'normal' in vfm_grades:
+                selected_grades.append("🟠보통")
+            if 'low' in vfm_grades:
+                selected_grades.append("🔴낮음")
+            grade_text = ", ".join(selected_grades)
+
+        legend_html += f"""
         <div style="margin-bottom: 6px;">
             <span style="color: green; font-size: 16px;">★</span>
             <strong style="color: green; margin-left: 5px; font-size: 12px;">2.0 이상</strong>
@@ -350,6 +410,13 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
             <strong style="color: red; margin-left: 5px; font-size: 12px;">0.5 미만</strong>
             <span style="font-size: 10px; color: #666; margin-left: 5px;">낮음</span>
         </div>
+        
+        <div style="margin-top: 8px; padding: 6px; background: #fff3cd; border-radius: 4px; border-left: 2px solid #ffc107;">
+            <div style="font-size: 10px; color: #856404;">
+                📍 <strong>정렬:</strong> VFM {sort_label}<br>
+                🎯 <strong>등급:</strong> {grade_text}
+            </div>
+        </div>
         """
 
     if vfm_stats:
@@ -360,7 +427,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
                     border-radius: 6px;
                     border-left: 3px solid #ffc107;">
             <div style="font-size: 10px; color: #856404; margin-bottom: 4px;">
-                <strong>📊 선택 지역 분포</strong>
+                <strong>📊 선택 조건 분포</strong>
             </div>
             <div style="font-size: 9px; color: #856404;">
                 최소: {vfm_stats['min']:.3f} | 최대: {vfm_stats['max']:.3f}<br>
@@ -377,7 +444,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
                     border-radius: 6px;
                     border-left: 3px solid #ff4444;">
             <div style="font-size: 9px; color: #cc0000;">
-                ⚠️ VFM 높은 순 {marker_limit}개만 표시<br>
+                ⚠️ VFM {sort_label} {marker_limit}개만 표시<br>
                 (나머지 {data_count - marker_limit:,}개 숨김)
             </div>
         </div>
@@ -396,19 +463,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
     """
 
     m.get_root().html.add_child(folium.Element(legend_html))
-
-    if df is None or len(df) == 0:
-        folium.Marker(
-            [37.5665, 126.9780],
-            popup="검색 결과가 없습니다",
-            icon=folium.Icon(color='red', icon='info-sign')
-        ).add_to(m)
-        return m
-
-    df_valid = df.dropna(subset=['lat', 'lon'])
-
-    if len(df_valid) == 0:
-        return m
 
     # 히트맵
     if map_type == "heatmap":
@@ -431,28 +485,58 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
 
     # 마커
     else:
-        df_display = df_valid.nlargest(marker_limit, 'custom_vfm')
+        total_count = len(df_valid)
+
+        # ✅ 3단계: 정렬 및 마커 제한
+        if total_count <= marker_limit:
+            if sort_order == "desc":
+                df_display = df_valid.sort_values(
+                    'custom_vfm', ascending=False).copy()
+            else:
+                df_display = df_valid.sort_values(
+                    'custom_vfm', ascending=True).copy()
+
+            df_display = df_display.reset_index(drop=True)
+        else:
+            if sort_order == "desc":
+                df_display = df_valid.nlargest(
+                    marker_limit, 'custom_vfm').copy()
+            else:
+                df_display = df_valid.nsmallest(
+                    marker_limit, 'custom_vfm').copy()
+
+            df_display = df_display.reset_index(drop=True)
+
+        # ✅ 4단계: 색상별로 마커 그룹 생성
+        green_markers = []
+        blue_markers = []
+        orange_markers = []
+        red_markers = []
 
         for idx, row in df_display.iterrows():
-            vfm = row.get('custom_vfm', 1.0)
+            vfm = float(row.get('custom_vfm', 1.0))
 
-            # ✅ 수정된 색상 기준: 0-0.5, 0.5-1.0, 1.0-2.0, 2.0+
+            # 색상 및 등급 결정
             if vfm >= 2.0:
                 color = 'green'
                 icon = 'star'
                 grade = '최우수 (2.0+)'
+                marker_list = green_markers
             elif vfm >= 1.0:
                 color = 'blue'
                 icon = 'home'
                 grade = '우수 (1.0~2.0)'
+                marker_list = blue_markers
             elif vfm >= 0.5:
                 color = 'orange'
                 icon = 'home'
                 grade = '보통 (0.5~1.0)'
+                marker_list = orange_markers
             else:
                 color = 'red'
                 icon = 'home'
                 grade = '낮음 (0~0.5)'
+                marker_list = red_markers
 
             # 가격 정보
             if contract_type == 'monthly':
@@ -547,7 +631,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
             safety_val = row.get('safety_score_scaled', 0)
             crime_val = row.get('grid_crime_index', 0)
 
-            # ✅ 팝업 HTML - X표시 위치 수정 (안쪽으로)
             popup_html = f"""
             <div style='width: 290px; font-family: "Segoe UI", Arial, sans-serif; position: relative;'>
                 <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
@@ -609,13 +692,41 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500)
             else:
                 tooltip_text = f"VFM: {vfm:.3f} | 전세: {deposit:,.0f}만"
 
-            folium.Marker(
+            # 마커 생성 및 리스트에 추가
+            marker = folium.Marker(
                 location=[row['lat'], row['lon']],
-                # ✅ max_width 증가
                 popup=folium.Popup(popup_html, max_width=300),
                 icon=folium.Icon(color=color, icon=icon, prefix='fa'),
                 tooltip=tooltip_text
-            ).add_to(m)
+            )
+            marker_list.append(marker)
+
+        # ✅ 5단계: 낮은 등급부터 추가 (높은 등급이 위로 표시되도록)
+        # 빨간색 → 주황색 → 파란색 → 초록색 순으로 추가
+        for marker in red_markers:
+            marker.add_to(m)
+
+        for marker in orange_markers:
+            marker.add_to(m)
+
+        for marker in blue_markers:
+            marker.add_to(m)
+
+        for marker in green_markers:
+            marker.add_to(m)
+
+        # 🔍 디버깅: 색상별 마커 개수 출력
+        print(f"\n{'='*60}")
+        print(f"📊 마커 생성 완료 (정렬: {sort_order})")
+        print(f"{'='*60}")
+        print(f"🟢 초록색 (2.0+):      {len(green_markers):,}개")
+        print(f"🔵 파란색 (1.0~2.0):   {len(blue_markers):,}개")
+        print(f"🟠 주황색 (0.5~1.0):   {len(orange_markers):,}개")
+        print(f"🔴 빨간색 (0~0.5):     {len(red_markers):,}개")
+        print(f"{'='*60}")
+        print(
+            f"📍 총 마커 개수:       {len(green_markers) + len(blue_markers) + len(orange_markers) + len(red_markers):,}개")
+        print(f"{'='*60}\n")
 
     if len(df_valid) > 0:
         m.location = [df_valid['lat'].mean(), df_valid['lon'].mean()]
@@ -629,7 +740,7 @@ def main():
     st.markdown("""
         <div class='header-container'>
             <h1 class='header-title'>🏠 Seoul Real Estate VFM Search</h1>
-            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 10.5 (UI 개선) | Updated: 2026-02</p>
+            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 11.2 (VFM 등급 선택) | Updated: 2026-02</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -673,6 +784,15 @@ def main():
         )
 
         if map_type == 'marker':
+            st.markdown("**📊 VFM 정렬**")
+            sort_order = st.radio(
+                "정렬 순서",
+                options=['desc', 'asc'],
+                format_func=lambda x: '⬇️ 높은 순 (추천)' if x == 'desc' else '⬆️ 낮은 순',
+                label_visibility='collapsed',
+                help="VFM이 높은 매물부터 보려면 '높은 순'을 선택하세요"
+            )
+
             st.markdown("**📍 마커 표시 개수**")
             marker_limit = st.slider(
                 "마커 개수",
@@ -681,30 +801,48 @@ def main():
                 value=500,
                 step=50,
                 label_visibility='collapsed',
-                help="VFM이 높은 순서로 표시됩니다."
+                help="선택한 정렬 순서대로 표시됩니다."
             )
-
-            st.info(f"💡 VFM 높은 순 **{marker_limit}개** 표시")
         else:
             marker_limit = 500
+            sort_order = 'desc'
 
+        # ✅ VFM 등급 선택 (간단하게)
         st.markdown("""
             <div class='panel-section'>
                 <div class='section-title'>
                     <span class='section-icon'>🎯</span>
-                    <span>VFM 지수 범위</span>
+                    <span>VFM 등급 선택</span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
 
-        vfm_range = st.slider(
-            "VFM",
-            0.0,
-            10.0,
-            (0.0, 10.0),
-            step=0.1,
-            label_visibility='collapsed'
-        )
+        col1, col2 = st.columns(2)
+
+        with col1:
+            show_excellent = st.checkbox(
+                "⭐ 최우수(2.0↑)", value=True, key="excellent")
+            show_good = st.checkbox("🔵 우수(1.0~2.0)", value=True, key="good")
+
+        with col2:
+            show_normal = st.checkbox(
+                "🟠 보통(0.5~1.0)", value=True, key="normal")
+            show_low = st.checkbox("🔴 낮음(0.5↓)", value=True, key="low")
+
+        # 선택된 등급 리스트 생성
+        vfm_grades = []
+        if show_excellent:
+            vfm_grades.append('excellent')
+        if show_good:
+            vfm_grades.append('good')
+        if show_normal:
+            vfm_grades.append('normal')
+        if show_low:
+            vfm_grades.append('low')
+
+        if len(vfm_grades) == 0:
+            st.warning("⚠️ 최소 하나의 등급을 선택해주세요!")
+            vfm_grades = ['excellent', 'good', 'normal', 'low']
 
         st.markdown("""
             <div class='panel-section'>
@@ -767,13 +905,9 @@ def main():
             if df.empty:
                 st.error("❌ 데이터를 불러올 수 없습니다.")
             else:
-                # VFM 필터
-                df_filtered = df[
-                    (df['custom_vfm'] >= vfm_range[0]) &
-                    (df['custom_vfm'] <= vfm_range[1])
-                ].copy()
-
                 # 구 필터
+                df_filtered = df.copy()
+
                 if '전체' not in selected_districts and len(selected_districts) > 0:
                     df_filtered = df_filtered[df_filtered['district'].isin(
                         selected_districts)]
@@ -795,103 +929,62 @@ def main():
                              <= price_range[1])
                         ]
 
+                # 인덱스 리셋
+                df_filtered = df_filtered.reset_index(drop=True)
+
+                # 색상 분포 계산
+                if len(df_filtered) > 0:
+                    red_count = len(
+                        df_filtered[df_filtered['custom_vfm'] < 0.5])
+                    orange_count = len(df_filtered[(df_filtered['custom_vfm'] >= 0.5) & (
+                        df_filtered['custom_vfm'] < 1.0)])
+                    blue_count = len(df_filtered[(df_filtered['custom_vfm'] >= 1.0) & (
+                        df_filtered['custom_vfm'] < 2.0)])
+                    green_count = len(
+                        df_filtered[df_filtered['custom_vfm'] >= 2.0])
+
+                    st.write("### 🎨 VFM 등급별 분포")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("⭐ 최우수", f"{green_count:,}개",
+                                  delta="2.0 이상" if show_excellent else "필터링됨")
+                    with col2:
+                        st.metric("🔵 우수", f"{blue_count:,}개",
+                                  delta="1.0~2.0" if show_good else "필터링됨")
+                    with col3:
+                        st.metric("🟠 보통", f"{orange_count:,}개",
+                                  delta="0.5~1.0" if show_normal else "필터링됨")
+                    with col4:
+                        st.metric("🔴 낮음", f"{red_count:,}개",
+                                  delta="0~0.5" if show_low else "필터링됨")
+
                 # 마커 제한 경고
                 if map_type == 'marker' and len(df_filtered) > marker_limit:
+                    sort_label = "높은" if sort_order == "desc" else "낮은"
                     st.warning(f"""
                     ⚠️ **마커 표시 제한**
                     
-                    검색 결과 **{len(df_filtered):,}건** 중 **VFM 높은 순 {marker_limit}개**만 표시됩니다.
+                    검색 결과 **{len(df_filtered):,}건** 중 **VFM {sort_label} 순 {marker_limit}개**만 표시됩니다.
                     
                     💡 전체를 보려면: 마커 개수를 늘리거나 히트맵 모드로 전환하세요.
                     """)
 
-                # VFM 분포 분석
-                if len(df_filtered) > 0:
-                    vfm_max = df_filtered['custom_vfm'].max()
-                    vfm_mean = df_filtered['custom_vfm'].mean()
-                    vfm_min = df_filtered['custom_vfm'].min()
-
-                    # ✅ 수정된 범위: 0-0.5, 0.5-1.0, 1.0-2.0, 2.0+
-                    vfm_excellent = len(
-                        df_filtered[df_filtered['custom_vfm'] >= 2.0])
-                    vfm_good = len(df_filtered[(df_filtered['custom_vfm'] >= 1.0) & (
-                        df_filtered['custom_vfm'] < 2.0)])
-                    vfm_normal = len(df_filtered[(df_filtered['custom_vfm'] >= 0.5) & (
-                        df_filtered['custom_vfm'] < 1.0)])
-                    vfm_low = len(df_filtered[df_filtered['custom_vfm'] < 0.5])
-
-                    if vfm_max < 0.5:
-                        st.error(f"""
-                        🔴 **VFM 분포 주의**
-                        
-                        선택한 지역의 VFM이 전반적으로 매우 낮습니다.
-                        
-                        - **최대**: {vfm_max:.3f} | **평균**: {vfm_mean:.3f}
-                        
-                        모든 매물이 **빨간색(0~0.5)**으로 표시됩니다.
-                        """)
-                    elif vfm_max < 1.0:
-                        st.info(f"""
-                        ℹ️ **VFM 분포 정보**
-                        
-                        - 🔴 낮음 (0~0.5): {vfm_low:,}건
-                        - 🟠 보통 (0.5~1.0): {vfm_normal:,}건
-                        """)
-                    else:
-                        if vfm_excellent + vfm_good > 0:
-                            st.success(f"""
-                            ✅ **VFM 분포 정보**
-                            
-                            - ⭐ 최우수 (2.0+): {vfm_excellent:,}건
-                            - 🔵 우수 (1.0~2.0): {vfm_good:,}건
-                            - 🟠 보통 (0.5~1.0): {vfm_normal:,}건
-                            - 🔴 낮음 (0~0.5): {vfm_low:,}건
-                            """)
-
-                # 메트릭
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.markdown(f"""
-                        <div class='metric-card'>
-                            <div class='metric-label'>검색 결과</div>
-                            <div class='metric-value'>{len(df_filtered):,}건</div>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                with col2:
-                    avg_vfm = df_filtered['custom_vfm'].mean() if len(
-                        df_filtered) > 0 else 0
-                    st.markdown(f"""
-                        <div class='metric-card'>
-                            <div class='metric-label'>평균 VFM</div>
-                            <div class='metric-value'>{avg_vfm:.3f}</div>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                with col3:
-                    districts = df_filtered['district'].nunique() if len(
-                        df_filtered) > 0 else 0
-                    st.markdown(f"""
-                        <div class='metric-card'>
-                            <div class='metric-label'>지역 수</div>
-                            <div class='metric-value'>{districts}개</div>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                with col4:
-                    max_vfm = df_filtered['custom_vfm'].max() if len(
-                        df_filtered) > 0 else 0
-                    st.markdown(f"""
-                        <div class='metric-card'>
-                            <div class='metric-label'>최고 VFM</div>
-                            <div class='metric-value'>{max_vfm:.3f}</div>
-                        </div>
-                    """, unsafe_allow_html=True)
+                # VFM 계산 방법 표시
+                st.info("""
+                📐 **VFM 계산 방법**
+                
+                **VFM = 미래 예상 가격 ÷ 현재 가격**
+                
+                - AI 모델(LSTM + GBR) 기반 6개월 후 가격 예측
+                - 서울 전체 기준 절대 평가
+                - VFM > 1.0: 상승 예상 (저평가)
+                - VFM < 1.0: 하락 예상 (고평가)
+                """)
 
                 # 지도
                 st.markdown("<br>", unsafe_allow_html=True)
                 folium_map = create_map(
-                    df_filtered, map_type, contract_type, marker_limit)
+                    df_filtered, map_type, contract_type, marker_limit, sort_order, vfm_grades)
                 st_folium(folium_map, width=None,
                           height=600, returned_objects=[])
 
@@ -958,8 +1051,9 @@ def main():
             st.markdown("""
             ### 📖 VFM 지수란?
             
-            **VFM (Value For Money) = 미래 예상 가격 / 현재 가격**
+            **VFM (Value For Money) = 미래 예상 가격 ÷ 현재 가격**
             
+            - AI 모델(LSTM + GBR) 기반 6개월 후 가격 예측
             - **VFM > 1.0**: 저평가 (투자 가치 높음 ↑)
             - **VFM = 1.0**: 적정 가격
             - **VFM < 1.0**: 고평가 (투자 주의)
@@ -978,21 +1072,34 @@ def main():
             ### 💡 사용 방법
             
             1. **계약 유형** 선택 (월세/전세)
-            2. **지도 설정** (마커/히트맵, 표시 개수)
-            3. **VFM 범위** 조정
-            4. **지역(구)** 선택
-            5. **가격 범위** 조정
-            6. **검색하기** 버튼 클릭
+            2. **지도 설정** (마커/히트맵)
+            3. **VFM 정렬** 선택 (높은 순/낮은 순)
+            4. **VFM 등급 선택** ⭐🔵🟠🔴 (원하는 등급만 표시)
+            5. **마커 표시 개수** 조정 (50~1000개)
+            6. **지역(구)** 선택
+            7. **가격 범위** 조정
+            8. **검색하기** 버튼 클릭
             
             ---
             
             ### 📌 주요 기능
             
+            - 🎯 **VFM 등급 선택**: 원하는 등급만 선택해서 표시
+            - 📊 **VFM 정렬**: 높은 순/낮은 순 선택 가능
             - 🗺️ **구 선택**: 원하는 지역만 선택
             - 📍 **마커 개수 조절**: 50~1000개
             - 🔥 **히트맵**: 전체 데이터 한눈에
             - 📊 **상세 분석**: 교통/편의/환경/안전/치안
             - 🔒 **고정 기준**: 서울 전체 기준 절대 평가
+            
+            ---
+            
+            ### ✅ VFM 등급 선택 활용법
+            
+            - **투자 목적**: ⭐최우수 + 🔵우수만 선택
+            - **저평가 물건 찾기**: 🔴낮음 제외하고 검색
+            - **전체 시장 분석**: 모든 등급 선택
+            - **위험 회피**: 🟠보통 + ⭐최우수만 선택
             """)
 
 
