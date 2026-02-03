@@ -1,16 +1,18 @@
 """
 Data Loader Module for Seoul Real Estate VFM Analysis
 서울 부동산 VFM 분석을 위한 데이터 로더 모듈
+Version 11.2.0 - 완전 새 버전
 """
 
 import pandas as pd
 import numpy as np
-from pathlib import Path
 import warnings
+import streamlit as st
 
 warnings.filterwarnings('ignore')
 
 
+@st.cache_data(show_spinner=False)
 def load_vfm_data(contract_type='monthly'):
     """
     VFM 데이터 로드 및 전처리
@@ -28,275 +30,174 @@ def load_vfm_data(contract_type='monthly'):
     try:
         # 파일 경로 설정
         if contract_type == 'monthly':
-            file_path = './output/vfm_analysis/vfm_monthly_full_2024-12_with_rent.csv'
+            file_path = './results/vfm_monthly_history_full.csv'
         else:
-            file_path = './output/vfm_analysis/vfm_jeonse_full_2024-12_with_rent.csv'
+            file_path = './results/vfm_jeonse_history_full.csv'
 
-        # 데이터 로드
+        print(f"\n{'='*80}")
+        print(f"📂 파일 로딩: {file_path}")
+
+        # CSV 파일 로드
         df = pd.read_csv(file_path)
+        print(f"✅ 원본 데이터 로드 완료: {len(df):,}건")
 
-        # 필수 컬럼 체크
-        required_cols = ['grid_id', 'trans_index', 'conv_index', 'env_index',
-                         'safety_score_scaled', 'grid_crime_index', 'mlp_value_score']
+        # 1. VFM 지수 매핑 (vfm_12m → vfm_index)
+        if 'vfm_12m' in df.columns:
+            df['vfm_index'] = pd.to_numeric(
+                df['vfm_12m'], errors='coerce').fillna(1.0)
+            print(f"✅ VFM 지수 매핑: vfm_12m → vfm_index")
+        else:
+            st.error("❌ vfm_12m 컬럼이 CSV에 없습니다!")
+            return pd.DataFrame()
 
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            raise ValueError(f"필수 컬럼 누락: {missing_cols}")
+        # 2. grid_id 문자열 변환
+        if 'grid_id' in df.columns:
+            df['grid_id'] = df['grid_id'].astype(str).str.strip()
 
-        # grid_id 문자열 변환
-        df['grid_id'] = df['grid_id'].astype(str).str.strip()
+        # 3. 좌표 처리 (center_lat, center_lon → lat, lon)
+        if 'center_lat' in df.columns and 'center_lon' in df.columns:
+            df['lat'] = pd.to_numeric(df['center_lat'], errors='coerce')
+            df['lon'] = pd.to_numeric(df['center_lon'], errors='coerce')
+            print(f"✅ 좌표 매핑: center_lat/center_lon → lat/lon")
 
-        # VFM 점수 계산 (누락된 경우)
-        if 'vfm_score' not in df.columns or 'vfm_normalized' not in df.columns:
-            # 각 지표를 0-100 범위로 정규화
-            score_columns = ['trans_index', 'conv_index', 'env_index',
-                             'safety_score_scaled', 'grid_crime_index', 'mlp_value_score']
+        # 4. 구 정보 처리 (sggnm → district)
+        if 'sggnm' in df.columns:
+            df['district'] = df['sggnm'].astype(str)
+            df['district'] = df['district'].replace(
+                ['nan', 'NaN', 'None', ''], '정보없음')
+            df.loc[df['district'].isna(), 'district'] = '정보없음'
+            print(f"✅ 구 정보 매핑: sggnm → district")
+        else:
+            df['district'] = '정보없음'
 
-            for col in score_columns:
-                if col in df.columns:
-                    min_val = df[col].min()
-                    max_val = df[col].max()
-                    if max_val > min_val:
-                        df[f'{col}_norm'] = (
-                            (df[col] - min_val) / (max_val - min_val)) * 100
-                    else:
-                        df[f'{col}_norm'] = 50.0
+        # 5. 날짜 처리
+        if 'datetime' in df.columns:
+            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+            df['year_month'] = df['datetime'].dt.strftime('%Y-%m')
 
-            # VFM 점수 계산 (평균)
-            norm_cols = [
-                f'{col}_norm' for col in score_columns if f'{col}_norm' in df.columns]
-            df['vfm_score'] = df[norm_cols].mean(axis=1)
-            df['vfm_normalized'] = df['vfm_score']  # 이미 0-100 범위
+            # 최신 데이터만 사용
+            df = df.sort_values('datetime').groupby(
+                ['grid_id', 'size_category'], as_index=False).last()
+            print(f"✅ 최신 데이터 필터링: {len(df):,}건 (기준일: {df['datetime'].max()})")
 
-        # 가격 정보 처리
+        # 6. 가격 정보 처리
         if contract_type == 'monthly':
-            # 월세의 경우
+            # 월세
+            if 'original_deposit' in df.columns:
+                df['deposit_amount'] = pd.to_numeric(
+                    df['original_deposit'], errors='coerce').fillna(0)
+            else:
+                df['deposit_amount'] = 0
+
             if 'monthly_rent' in df.columns:
                 df['monthly_rent'] = pd.to_numeric(
-                    df['monthly_rent'], errors='coerce')
-            if 'deposit_amount' in df.columns:
-                df['deposit_amount'] = pd.to_numeric(
-                    df['deposit_amount'], errors='coerce')
+                    df['monthly_rent'], errors='coerce').fillna(0)
+            else:
+                df['monthly_rent'] = 0
         else:
-            # 전세의 경우
-            if 'total_deposit_median' in df.columns:
+            # 전세
+            if 'fair_value' in df.columns:
                 df['total_deposit_median'] = pd.to_numeric(
-                    df['total_deposit_median'], errors='coerce')
+                    df['fair_value'], errors='coerce').fillna(0)
+            else:
+                df['total_deposit_median'] = 0
 
-        # 날짜 처리
-        date_columns = ['contract_date', 'year_month']
-        for col in date_columns:
+        # 7. 예측 가격 처리 (pred_12m → future_price)
+        if 'pred_12m' in df.columns:
+            df['future_price'] = pd.to_numeric(
+                df['pred_12m'], errors='coerce').fillna(0)
+        else:
+            df['future_price'] = 0
+
+        # 8. 가격 변화율 계산
+        df['price_change_pct'] = 0.0
+
+        if contract_type == 'monthly':
+            current_value = df['deposit_amount'] + (df['monthly_rent'] * 100)
+            mask = (current_value > 0) & (df['future_price'] > 0)
+            if mask.sum() > 0:
+                df.loc[mask, 'price_change_pct'] = (
+                    (df.loc[mask, 'future_price'] -
+                     current_value[mask]) / current_value[mask] * 100
+                ).round(2)
+        else:
+            mask = (df['total_deposit_median'] > 0) & (df['future_price'] > 0)
+            if mask.sum() > 0:
+                df.loc[mask, 'price_change_pct'] = (
+                    (df.loc[mask, 'future_price'] - df.loc[mask, 'total_deposit_median']) /
+                    df.loc[mask, 'total_deposit_median'] * 100
+                ).round(2)
+
+        # 9. 평형 정보 처리
+        if 'size_category' in df.columns:
+            df['size_category'] = df['size_category'].fillna('미분류')
+
+        # 10. 인프라 지표 처리
+        infra_cols = ['trans_index', 'conv_index', 'env_index',
+                      'safety_score_scaled', 'grid_crime_index']
+
+        for col in infra_cols:
             if col in df.columns:
-                try:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                except:
-                    pass
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            else:
+                df[col] = 0
+
+        print(f"✅ 데이터 전처리 완료")
+        print(f"📊 최종 데이터: {len(df):,}건")
+        print(
+            f"📍 VFM 통계: min={df['vfm_index'].min():.3f}, max={df['vfm_index'].max():.3f}, mean={df['vfm_index'].mean():.3f}")
+        print(f"🏘️ 구 개수: {df['district'].nunique()}개")
+        print(f"{'='*80}\n")
 
         return df
 
     except FileNotFoundError:
-        raise FileNotFoundError(f"데이터 파일을 찾을 수 없습니다: {file_path}")
+        st.error(f"❌ 데이터 파일을 찾을 수 없습니다: {file_path}")
+        return pd.DataFrame()
     except Exception as e:
-        raise Exception(f"데이터 로드 중 오류 발생: {str(e)}")
+        st.error(f"❌ 데이터 로드 중 오류 발생: {str(e)}")
+        import traceback
+        st.error(f"상세 오류:\n{traceback.format_exc()}")
+        return pd.DataFrame()
 
 
 def load_grid_mapping():
-    """
-    그리드-구 매핑 데이터 로드
-    
-    Returns:
-    --------
-    pd.DataFrame
-        그리드 매핑 데이터프레임 (grid_id, district, lat, lon)
-    """
-    try:
-        file_path = './data/grid_district_mapping.csv'
-        df_mapping = pd.read_csv(file_path)
-
-        # 필수 컬럼 체크
-        required_cols = ['grid_id', 'district']
-        missing_cols = [
-            col for col in required_cols if col not in df_mapping.columns]
-        if missing_cols:
-            raise ValueError(f"매핑 파일 필수 컬럼 누락: {missing_cols}")
-
-        # grid_id 문자열 변환
-        df_mapping['grid_id'] = df_mapping['grid_id'].astype(str).str.strip()
-
-        # 좌표 컬럼 확인 및 정리
-        if 'lat' in df_mapping.columns and 'lon' in df_mapping.columns:
-            df_mapping['lat'] = pd.to_numeric(
-                df_mapping['lat'], errors='coerce')
-            df_mapping['lon'] = pd.to_numeric(
-                df_mapping['lon'], errors='coerce')
-        else:
-            # 좌표 컬럼이 없는 경우 경고 (출력 안 함)
-            pass
-
-        return df_mapping
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"그리드 매핑 파일을 찾을 수 없습니다: {file_path}")
-    except Exception as e:
-        raise Exception(f"매핑 데이터 로드 중 오류 발생: {str(e)}")
+    """그리드-구 매핑 데이터 로드 (하위 호환성)"""
+    return pd.DataFrame()
 
 
 def merge_vfm_with_district(df_vfm, df_mapping):
-    """
-    VFM 데이터와 구 매핑 데이터 병합
-    
-    Parameters:
-    -----------
-    df_vfm : pd.DataFrame
-        VFM 데이터
-    df_mapping : pd.DataFrame
-        그리드 매핑 데이터
-    
-    Returns:
-    --------
-    pd.DataFrame
-        병합된 데이터프레임
-    """
-    try:
-        # 병합 전 grid_id 타입 통일
-        df_vfm['grid_id'] = df_vfm['grid_id'].astype(str).str.strip()
-        df_mapping['grid_id'] = df_mapping['grid_id'].astype(str).str.strip()
-
-        # 병합할 컬럼 결정
-        merge_cols = ['district']
-        if 'lat' in df_mapping.columns and 'lon' in df_mapping.columns:
-            merge_cols.extend(['lat', 'lon'])
-
-        # 병합 수행
-        df_merged = df_vfm.merge(
-            df_mapping[['grid_id'] + merge_cols],
-            on='grid_id',
-            how='left'
-        )
-
-        # 매칭 실패 건 확인 (경고 메시지 출력 안 함)
-        unmatched = df_merged['district'].isna().sum()
-        if unmatched > 0:
-            # 매칭 실패 건은 '🔍 미분류'로 표시
-            df_merged['district'].fillna('🔍 미분류', inplace=True)
-
-        return df_merged
-
-    except Exception as e:
-        raise Exception(f"데이터 병합 중 오류 발생: {str(e)}")
+    """VFM 데이터와 구 매핑 데이터 병합 (하위 호환성)"""
+    return df_vfm
 
 
 def get_data_summary(df, contract_type='monthly'):
-    """
-    데이터 요약 정보 생성
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        데이터프레임
-    contract_type : str
-        'monthly' 또는 'jeonse'
-    
-    Returns:
-    --------
-    dict
-        요약 정보 딕셔너리
-    """
-    summary = {
-        'total_records': len(df),
-        'unique_grids': df['grid_id'].nunique(),
-        'vfm_range': (df['vfm_normalized'].min(), df['vfm_normalized'].max()),
-        'vfm_mean': df['vfm_normalized'].mean()
+    """데이터 요약 정보 생성"""
+    if df is None or df.empty:
+        return {
+            'total_count': 0,
+            'districts': 0,
+            'grids': 0,
+            'vfm_mean': 0,
+            'vfm_median': 0
+        }
+
+    return {
+        'total_count': len(df),
+        'districts': df['district'].nunique() if 'district' in df.columns else 0,
+        'grids': df['grid_id'].nunique() if 'grid_id' in df.columns else 0,
+        'vfm_mean': df['vfm_index'].mean() if 'vfm_index' in df.columns else 0,
+        'vfm_median': df['vfm_index'].median() if 'vfm_index' in df.columns else 0
     }
-
-    if contract_type == 'monthly':
-        if 'monthly_rent' in df.columns:
-            summary['monthly_rent_available'] = df['monthly_rent'].notna().sum()
-            summary['monthly_rent_range'] = (
-                df['monthly_rent'].min(),
-                df['monthly_rent'].max()
-            )
-            summary['monthly_rent_mean'] = df['monthly_rent'].mean()
-
-        if 'deposit_amount' in df.columns:
-            summary['deposit_range'] = (
-                df['deposit_amount'].min(),
-                df['deposit_amount'].max()
-            )
-            summary['deposit_mean'] = df['deposit_amount'].mean()
-    else:
-        if 'total_deposit_median' in df.columns:
-            summary['jeonse_range'] = (
-                df['total_deposit_median'].min(),
-                df['total_deposit_median'].max()
-            )
-            summary['jeonse_mean'] = df['total_deposit_median'].mean()
-
-    return summary
 
 
 def get_grid_coordinates(grid_id):
-    """
-    특정 그리드의 좌표 반환
-    
-    Parameters:
-    -----------
-    grid_id : str
-        그리드 ID
-    
-    Returns:
-    --------
-    tuple
-        (lat, lon) 또는 (None, None)
-    """
-    try:
-        df_mapping = load_grid_mapping()
-        grid_id = str(grid_id).strip()
-
-        row = df_mapping[df_mapping['grid_id'] == grid_id]
-
-        if len(row) > 0 and 'lat' in row.columns and 'lon' in row.columns:
-            lat = row.iloc[0]['lat']
-            lon = row.iloc[0]['lon']
-
-            if pd.notna(lat) and pd.notna(lon):
-                return (float(lat), float(lon))
-
-        return (None, None)
-
-    except:
-        return (None, None)
+    """특정 그리드의 좌표 반환"""
+    return (None, None)
 
 
 def add_district_column(df):
-    """
-    데이터프레임에 구(district) 컬럼 추가
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        VFM 데이터프레임
-    
-    Returns:
-    --------
-    pd.DataFrame
-        district 컬럼이 추가된 데이터프레임
-    """
-    try:
-        # 이미 district 컬럼이 있는 경우
-        if 'district' in df.columns:
-            return df
-
-        # 매핑 데이터 로드
-        df_mapping = load_grid_mapping()
-
-        # 병합
-        df_result = merge_vfm_with_district(df, df_mapping)
-
-        return df_result
-
-    except Exception as e:
-        # 에러 발생 시 원본 반환
-        if 'district' not in df.columns:
-            df['district'] = '정보 없음'
-        return df
+    """데이터프레임에 구(district) 컬럼 추가"""
+    if 'district' not in df.columns:
+        df['district'] = '정보없음'
+    return df
