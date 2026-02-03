@@ -1,12 +1,14 @@
 """
 Seoul Real Estate VFM Search Application
-Final Version 11.2.0 - 평형 필터 추가
+Final Version 11.2.0 - 최종 완성
 
 주요 변경:
 - results 폴더 데이터 사용
 - vfm_12m → vfm_index 매핑
 - 최신 데이터만 표시
 - 평형 필터 추가 (초소형/소형/중형/대형)
+- 3단계 VFM 등급 (0.5 미만 제외)
+- 지도 마커 색상과 통계 색상 일치
 """
 
 from modules.data_loader import (
@@ -261,8 +263,8 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
     if len(df_valid) == 0:
         return m
 
-    # VFM 등급별 필터링
-    if vfm_grades and len(vfm_grades) > 0 and len(vfm_grades) < 4:
+    # VFM 등급별 필터링 (3단계)
+    if vfm_grades and len(vfm_grades) > 0 and len(vfm_grades) < 3:
         conditions = []
         if 'excellent' in vfm_grades:
             conditions.append(df_valid['custom_vfm'] >= 2.0)
@@ -272,8 +274,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
         if 'normal' in vfm_grades:
             conditions.append((df_valid['custom_vfm'] >= 0.5) & (
                 df_valid['custom_vfm'] < 1.0))
-        if 'low' in vfm_grades:
-            conditions.append(df_valid['custom_vfm'] < 0.5)
 
         if conditions:
             combined_condition = conditions[0]
@@ -317,22 +317,20 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
     if map_type == "marker":
         sort_label = "높은 순" if sort_order == "desc" else "낮은 순"
         selected_grades = []
-        if not vfm_grades or len(vfm_grades) == 4:
+        if not vfm_grades or len(vfm_grades) == 3:
             grade_text = "전체 등급"
         else:
             if 'excellent' in vfm_grades:
-                selected_grades.append("⭐최우수")
+                selected_grades.append("🟢최우수")
             if 'good' in vfm_grades:
                 selected_grades.append("🔵우수")
             if 'normal' in vfm_grades:
                 selected_grades.append("🟠보통")
-            if 'low' in vfm_grades:
-                selected_grades.append("🔴낮음")
             grade_text = ", ".join(selected_grades)
 
         legend_html += f"""
         <div style="margin-bottom: 6px;">
-            <span style="color: green; font-size: 16px;">★</span>
+            <span style="color: green; font-size: 16px;">●</span>
             <strong style="color: green; margin-left: 5px; font-size: 12px;">2.0 이상</strong>
             <span style="font-size: 10px; color: #666; margin-left: 5px;">최우수</span>
         </div>
@@ -345,11 +343,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
             <span style="color: orange; font-size: 16px;">●</span>
             <strong style="color: orange; margin-left: 5px; font-size: 12px;">0.5 ~ 1.0</strong>
             <span style="font-size: 10px; color: #666; margin-left: 5px;">보통</span>
-        </div>
-        <div style="margin-bottom: 6px;">
-            <span style="color: red; font-size: 16px;">●</span>
-            <strong style="color: red; margin-left: 5px; font-size: 12px;">0.5 미만</strong>
-            <span style="font-size: 10px; color: #666; margin-left: 5px;">낮음</span>
         </div>
         <div style="margin-top: 8px; padding: 6px; background: #fff3cd; border-radius: 4px; border-left: 2px solid #ffc107;">
             <div style="font-size: 10px; color: #856404;">
@@ -434,7 +427,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
         green_markers = []
         blue_markers = []
         orange_markers = []
-        red_markers = []
 
         for idx, row in df_display.iterrows():
             vfm = float(row.get('custom_vfm', 1.0))
@@ -449,16 +441,11 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                 icon = 'home'
                 grade = '우수 (1.0~2.0)'
                 marker_list = blue_markers
-            elif vfm >= 0.5:
+            else:  # 0.5~1.0
                 color = 'orange'
                 icon = 'home'
                 grade = '보통 (0.5~1.0)'
                 marker_list = orange_markers
-            else:
-                color = 'red'
-                icon = 'home'
-                grade = '낮음 (0~0.5)'
-                marker_list = red_markers
 
             # 평형 정보
             size_cat = row.get('size_category', '미분류')
@@ -609,8 +596,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
             marker_list.append(marker)
 
         # 낮은 등급부터 추가 (높은 등급이 위로)
-        for marker in red_markers:
-            marker.add_to(m)
         for marker in orange_markers:
             marker.add_to(m)
         for marker in blue_markers:
@@ -624,7 +609,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
         print(f"🟢 초록색 (2.0+):      {len(green_markers):,}개")
         print(f"🔵 파란색 (1.0~2.0):   {len(blue_markers):,}개")
         print(f"🟠 주황색 (0.5~1.0):   {len(orange_markers):,}개")
-        print(f"🔴 빨간색 (0~0.5):     {len(red_markers):,}개")
         print(f"{'='*60}\n")
 
     if len(df_valid) > 0:
@@ -638,7 +622,7 @@ def main():
     st.markdown("""
         <div class='header-container'>
             <h1 class='header-title'>🏠 Seoul Real Estate VFM Search</h1>
-            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 11.2 (평형 필터 추가) | Updated: 2026-02</p>
+            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 11.2 (최종) | Updated: 2026-02</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -705,17 +689,18 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             show_excellent = st.checkbox(
-                "⭐ 최우수(2.0↑)", value=True, key="excellent")
-            show_good = st.checkbox("🔵 우수(1.0~2.0)", value=True, key="good")
+                "🟢 최우수(2.0↑)", value=True, key="excellent")
 
         with col2:
+            show_good = st.checkbox("🔵 우수(1.0~2.0)", value=True, key="good")
+
+        with col3:
             show_normal = st.checkbox(
                 "🟠 보통(0.5~1.0)", value=True, key="normal")
-            show_low = st.checkbox("🔴 낮음(0.5↓)", value=True, key="low")
 
         vfm_grades = []
         if show_excellent:
@@ -724,12 +709,10 @@ def main():
             vfm_grades.append('good')
         if show_normal:
             vfm_grades.append('normal')
-        if show_low:
-            vfm_grades.append('low')
 
         if len(vfm_grades) == 0:
             st.warning("⚠️ 최소 하나의 등급을 선택해주세요!")
-            vfm_grades = ['excellent', 'good', 'normal', 'low']
+            vfm_grades = ['excellent', 'good', 'normal']
 
         st.markdown("""
             <div class='panel-section'>
@@ -756,7 +739,6 @@ def main():
             selected_districts = ['전체']
             st.warning("⚠️ 구 정보를 불러올 수 없습니다.")
 
-        # ✅ 평형 선택 섹션 추가
         st.markdown("""
             <div class='panel-section'>
                 <div class='section-title'><span class='section-icon'>📏</span><span>평형 선택</span></div>
@@ -767,7 +749,7 @@ def main():
             available_sizes = temp_df['size_category'].dropna(
             ).unique().tolist()
 
-            # 평형 순서 정렬 (초소형 → 소형 → 중형 → 대형)
+            # 평형 순서 정렬
             size_order = ['초소형', '소형', '중형', '대형']
             available_sizes = [s for s in size_order if s in available_sizes]
 
@@ -820,7 +802,7 @@ def main():
                     df_filtered = df_filtered[df_filtered['district'].isin(
                         selected_districts)]
 
-                # ✅ 평형 필터
+                # 평형 필터
                 if '전체' not in selected_sizes and len(selected_sizes) > 0:
                     df_filtered = df_filtered[df_filtered['size_category'].isin(
                         selected_sizes)]
@@ -846,8 +828,6 @@ def main():
 
                 if len(df_filtered) > 0:
                     # VFM 등급별 분포
-                    red_count = len(
-                        df_filtered[df_filtered['custom_vfm'] < 0.5])
                     orange_count = len(df_filtered[(df_filtered['custom_vfm'] >= 0.5) & (
                         df_filtered['custom_vfm'] < 1.0)])
                     blue_count = len(df_filtered[(df_filtered['custom_vfm'] >= 1.0) & (
@@ -856,21 +836,45 @@ def main():
                         df_filtered[df_filtered['custom_vfm'] >= 2.0])
 
                     st.write("### 🎨 VFM 등급별 분포")
-                    col1, col2, col3, col4 = st.columns(4)
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric(
-                            "⭐ 최우수", f"{green_count:,}개", delta="2.0 이상" if show_excellent else "필터링됨")
+                        st.markdown(f"""
+                        <div style='background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%); 
+                                    padding: 1rem; border-radius: 10px; text-align: center; 
+                                    box-shadow: 0 2px 8px rgba(46,204,113,0.4);'>
+                            <div style='color: white; font-size: 0.8rem; margin-bottom: 0.3rem;'>🟢 최우수</div>
+                            <div style='color: white; font-size: 1.8rem; font-weight: 700;'>{green_count:,}개</div>
+                            <div style='color: rgba(255,255,255,0.9); font-size: 0.75rem; margin-top: 0.3rem;'>
+                                {'2.0 이상' if show_excellent else '필터링됨'}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     with col2:
-                        st.metric("🔵 우수", f"{blue_count:,}개",
-                                  delta="1.0~2.0" if show_good else "필터링됨")
+                        st.markdown(f"""
+                        <div style='background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); 
+                                    padding: 1rem; border-radius: 10px; text-align: center; 
+                                    box-shadow: 0 2px 8px rgba(52,152,219,0.4);'>
+                            <div style='color: white; font-size: 0.8rem; margin-bottom: 0.3rem;'>🔵 우수</div>
+                            <div style='color: white; font-size: 1.8rem; font-weight: 700;'>{blue_count:,}개</div>
+                            <div style='color: rgba(255,255,255,0.9); font-size: 0.75rem; margin-top: 0.3rem;'>
+                                {'1.0~2.0' if show_good else '필터링됨'}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     with col3:
-                        st.metric(
-                            "🟠 보통", f"{orange_count:,}개", delta="0.5~1.0" if show_normal else "필터링됨")
-                    with col4:
-                        st.metric("🔴 낮음", f"{red_count:,}개",
-                                  delta="0~0.5" if show_low else "필터링됨")
+                        st.markdown(f"""
+                        <div style='background: linear-gradient(135deg, #e67e22 0%, #d35400 100%); 
+                                    padding: 1rem; border-radius: 10px; text-align: center; 
+                                    box-shadow: 0 2px 8px rgba(230,126,34,0.4);'>
+                            <div style='color: white; font-size: 0.8rem; margin-bottom: 0.3rem;'>🟠 보통</div>
+                            <div style='color: white; font-size: 1.8rem; font-weight: 700;'>{orange_count:,}개</div>
+                            <div style='color: rgba(255,255,255,0.9); font-size: 0.75rem; margin-top: 0.3rem;'>
+                                {'0.5~1.0' if show_normal else '필터링됨'}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                    # ✅ 평형별 분포
+                    # 평형별 분포
                     if 'size_category' in df_filtered.columns:
                         st.write("### 📏 평형별 분포")
                         col1, col2, col3, col4 = st.columns(4)
@@ -990,12 +994,13 @@ def main():
             
             ---
             
-            ### 📊 VFM 등급 기준
+            ### 📊 VFM 등급 기준 (3단계)
             
-            - **2.0 이상**: ⭐ 최우수 (강력 추천)
+            - **2.0 이상**: 🟢 최우수 (강력 추천)
             - **1.0 ~ 2.0**: 🔵 우수 (투자 고려)
             - **0.5 ~ 1.0**: 🟠 보통 (신중 검토)
-            - **0 ~ 0.5**: 🔴 낮음 (재고려)
+            
+            ※ VFM 0.5 미만 데이터는 필터링되어 제외되었습니다.
             
             ---
             
