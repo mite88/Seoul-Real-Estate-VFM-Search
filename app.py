@@ -1,14 +1,13 @@
 """
 Seoul Real Estate VFM Search Application
-Final Version 11.2.0 - 최종 완성
+Final Version 11.3.0 - 시각화 탭 추가 (텍스트 가시성 개선)
 
 주요 변경:
-- results 폴더 데이터 사용
-- vfm_12m → vfm_index 매핑
-- 최신 데이터만 표시
-- 평형 필터 추가 (초소형/소형/중형/대형)
-- 3단계 VFM 등급 (0.5 미만 제외)
-- 지도 마커 색상과 통계 색상 일치
+- 왼쪽 패널 상단에 지도/시각화 탭 추가
+- 검색 결과 테이블 삭제
+- 다양한 차트/그래프 추가
+- 텍스트 크기 및 범례 가시성 대폭 개선
+- 차트 축 라벨 색상 진하게 변경
 """
 
 from modules.data_loader import (
@@ -23,6 +22,8 @@ import numpy as np
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap
+import plotly.express as px
+import plotly.graph_objects as go
 import sys
 from pathlib import Path
 
@@ -212,6 +213,44 @@ st.markdown("""
         font: 24px / 24px Tahoma, Verdana, sans-serif !important;
         color: #fff !important;
     }
+    
+    /* 탭 스타일 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: white;
+        border-radius: 10px;
+        padding: 0.5rem;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        color: #495057;
+        font-weight: 600;
+        padding: 0.5rem 1rem;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+    
+    /* Plotly 차트 텍스트 스타일 강화 */
+    .js-plotly-plot .plotly text {
+        fill: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    .js-plotly-plot .plotly .xtick text,
+    .js-plotly-plot .plotly .ytick text {
+        fill: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    .js-plotly-plot .plotly .gtitle {
+        fill: #000000 !important;
+        font-weight: 800 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -224,7 +263,6 @@ def load_data_simple(contract_type):
         df_grid = load_grid_mapping()
         df = merge_vfm_with_district(df_vfm, df_grid)
 
-        # vfm_index를 custom_vfm으로 복사
         if 'vfm_index' in df.columns:
             df['custom_vfm'] = df['vfm_index']
         else:
@@ -256,14 +294,13 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
         ).add_to(m)
         return m
 
-    # 좌표 유효성 검사
     df_valid = df.dropna(subset=['lat', 'lon']).copy()
     df_valid = df_valid.reset_index(drop=True)
 
     if len(df_valid) == 0:
         return m
 
-    # VFM 등급별 필터링 (3단계)
+    # VFM 등급별 필터링
     if vfm_grades and len(vfm_grades) > 0 and len(vfm_grades) < 3:
         conditions = []
         if 'excellent' in vfm_grades:
@@ -282,7 +319,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
             df_valid = df_valid[combined_condition].copy()
             df_valid = df_valid.reset_index(drop=True)
 
-    # VFM 분포 통계
     vfm_stats = {}
     if len(df_valid) > 0:
         vfm_values = df_valid['custom_vfm'].dropna()
@@ -308,27 +344,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                     font-weight: 600; text-align: center; font-size: 14px;">
             📊 VFM 지수 범례 ({'월세' if contract_type == 'monthly' else '전세'})
         </div>
-        <div style="margin-bottom: 8px; padding: 8px; background: #e8f5e9; border-radius: 6px; border-left: 3px solid #4caf50;">
-            <div style="font-size: 11px; color: #2e7d32; margin-bottom: 4px;"><strong>📐 VFM 계산 방법</strong></div>
-            <div style="font-size: 10px; color: #1b5e20;">VFM = 미래 예상 가격 ÷ 현재 가격<br>(AI 모델 기반 12개월 후 예측)</div>
-        </div>
-    """
-
-    if map_type == "marker":
-        sort_label = "높은 순" if sort_order == "desc" else "낮은 순"
-        selected_grades = []
-        if not vfm_grades or len(vfm_grades) == 3:
-            grade_text = "전체 등급"
-        else:
-            if 'excellent' in vfm_grades:
-                selected_grades.append("🟢최우수")
-            if 'good' in vfm_grades:
-                selected_grades.append("🔵우수")
-            if 'normal' in vfm_grades:
-                selected_grades.append("🟠보통")
-            grade_text = ", ".join(selected_grades)
-
-        legend_html += f"""
         <div style="margin-bottom: 6px;">
             <span style="color: green; font-size: 16px;">●</span>
             <strong style="color: green; margin-left: 5px; font-size: 12px;">2.0 이상</strong>
@@ -344,36 +359,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
             <strong style="color: orange; margin-left: 5px; font-size: 12px;">0.5 ~ 1.0</strong>
             <span style="font-size: 10px; color: #666; margin-left: 5px;">보통</span>
         </div>
-        <div style="margin-top: 8px; padding: 6px; background: #fff3cd; border-radius: 4px; border-left: 2px solid #ffc107;">
-            <div style="font-size: 10px; color: #856404;">
-                📍 <strong>정렬:</strong> VFM {sort_label}<br>
-                🎯 <strong>등급:</strong> {grade_text}
-            </div>
-        </div>
-        """
-
-    if vfm_stats:
-        legend_html += f"""
-        <div style="margin-top: 8px; padding: 8px; background: #fff3cd; border-radius: 6px; border-left: 3px solid #ffc107;">
-            <div style="font-size: 10px; color: #856404; margin-bottom: 4px;"><strong>📊 선택 조건 분포</strong></div>
-            <div style="font-size: 9px; color: #856404;">
-                최소: {vfm_stats['min']:.3f} | 최대: {vfm_stats['max']:.3f}<br>
-                평균: {vfm_stats['mean']:.3f} | 중앙: {vfm_stats['median']:.3f}
-            </div>
-        </div>
-        """
-
-    if map_type == "marker" and data_count > marker_limit:
-        legend_html += f"""
-        <div style="margin-top: 8px; padding: 8px; background: #ffe5e5; border-radius: 6px; border-left: 3px solid #ff4444;">
-            <div style="font-size: 9px; color: #cc0000;">
-                ⚠️ VFM {sort_label} {marker_limit}개만 표시<br>
-                (나머지 {data_count - marker_limit:,}개 숨김)
-            </div>
-        </div>
-        """
-
-    legend_html += f"""
         <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e9ecef; font-size: 11px; color: #495057;">
             <strong>📍 전체:</strong> {data_count:,}건<br>
             <strong>🗺️ 표시:</strong> {display_count:,}건
@@ -423,7 +408,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                     marker_limit, 'custom_vfm').copy()
             df_display = df_display.reset_index(drop=True)
 
-        # 색상별 마커 그룹
         green_markers = []
         blue_markers = []
         orange_markers = []
@@ -441,16 +425,14 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                 icon = 'home'
                 grade = '우수 (1.0~2.0)'
                 marker_list = blue_markers
-            else:  # 0.5~1.0
+            else:
                 color = 'orange'
                 icon = 'home'
                 grade = '보통 (0.5~1.0)'
                 marker_list = orange_markers
 
-            # 평형 정보
             size_cat = row.get('size_category', '미분류')
 
-            # 가격 정보
             if contract_type == 'monthly':
                 deposit = row.get('deposit_amount', 0)
                 rent = row.get('monthly_rent', 0)
@@ -531,7 +513,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                 else:
                     prediction_html = ""
 
-            # 인프라 지표
             trans_val = row.get('trans_index', 0)
             conv_val = row.get('conv_index', 0)
             env_val = row.get('env_index', 0)
@@ -595,21 +576,12 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
             )
             marker_list.append(marker)
 
-        # 낮은 등급부터 추가 (높은 등급이 위로)
         for marker in orange_markers:
             marker.add_to(m)
         for marker in blue_markers:
             marker.add_to(m)
         for marker in green_markers:
             marker.add_to(m)
-
-        print(f"\n{'='*60}")
-        print(f"📊 마커 생성 완료 (정렬: {sort_order})")
-        print(f"{'='*60}")
-        print(f"🟢 초록색 (2.0+):      {len(green_markers):,}개")
-        print(f"🔵 파란색 (1.0~2.0):   {len(blue_markers):,}개")
-        print(f"🟠 주황색 (0.5~1.0):   {len(orange_markers):,}개")
-        print(f"{'='*60}\n")
 
     if len(df_valid) > 0:
         m.location = [df_valid['lat'].mean(), df_valid['lon'].mean()]
@@ -618,11 +590,581 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
     return m
 
 
+def create_visualizations(df_filtered, contract_type):
+    """시각화 생성 - 텍스트 가시성 대폭 개선"""
+
+    if df_filtered.empty:
+        st.warning("⚠️ 표시할 데이터가 없습니다.")
+        return
+
+    # 1. VFM 분포 히스토그램
+    st.subheader("📊 VFM 지수 분포")
+    fig_hist = px.histogram(
+        df_filtered,
+        x='custom_vfm',
+        nbins=50,
+        title='VFM 지수 분포',
+        labels={'custom_vfm': 'VFM 지수', 'count': '매물 수'},
+        color_discrete_sequence=['#667eea']
+    )
+    fig_hist.update_layout(
+        font=dict(size=18, family="Arial, sans-serif", color="#000000"),
+        title_font=dict(size=26, family="Arial, sans-serif", color="#000000"),
+        xaxis_title_font=dict(size=20, color="#000000"),
+        yaxis_title_font=dict(size=20, color="#000000"),
+        xaxis=dict(
+            tickfont=dict(size=18, color="#000000"),
+            title_standoff=15,
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.1)'
+        ),
+        yaxis=dict(
+            tickfont=dict(size=18, color="#000000"),
+            title_standoff=15,
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.1)'
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        height=450
+    )
+    fig_hist.update_traces(
+        hoverlabel=dict(
+            bgcolor="white",  # 🔥 호버 배경 흰색
+            font_size=16,  # 🔥 글자 크기
+            font_family="Arial",
+            font_color="black",  # 🔥 글자 검은색
+            bordercolor="#cccccc"  # 🔥 테두리 색상
+        )
+    )
+    st.plotly_chart(fig_hist, use_container_width=True,
+                    config={'displayModeBar': False})
+
+    # 2. 구별 분석
+    st.subheader("🗺️ 구별 분석")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        district_avg = df_filtered.groupby('district')['custom_vfm'].agg([
+            'mean', 'count']).reset_index()
+        district_avg.columns = ['구', '평균 VFM', '매물 수']
+        district_avg = district_avg.sort_values(
+            '평균 VFM', ascending=False).head(10)
+
+        fig_district = px.bar(
+            district_avg,
+            x='구',
+            y='평균 VFM',
+            title='구별 평균 VFM (상위 10개)',
+            labels={'구': '구', '평균 VFM': '평균 VFM'},
+            color='평균 VFM',
+            color_continuous_scale='Viridis'
+        )
+        fig_district.update_layout(
+            font=dict(size=18, family="Arial, sans-serif", color="#000000"),
+            title_font=dict(
+                size=26, family="Arial, sans-serif", color="#000000"),
+            xaxis_title_font=dict(size=20, color="#000000"),
+            yaxis_title_font=dict(size=20, color="#000000"),
+            xaxis=dict(
+                tickfont=dict(size=18, color="#000000"),
+                title_standoff=15,
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            yaxis=dict(
+                tickfont=dict(size=18, color="#000000"),
+                title_standoff=15,
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            showlegend=False,
+            height=450
+        )
+        fig_district.update_traces(
+            hoverlabel=dict(
+                bgcolor="white",  # 🔥 호버 배경 흰색
+                font_size=16,  # 🔥 글자 크기
+                font_family="Arial",
+                font_color="black",  # 🔥 글자 검은색
+                bordercolor="#cccccc"  # 🔥 테두리 색상
+            )
+        )
+        st.plotly_chart(fig_district, use_container_width=True,
+                        config={'displayModeBar': False})
+
+    with col2:
+        district_count = df_filtered['district'].value_counts().head(
+            10).reset_index()
+        district_count.columns = ['구', '매물 수']
+
+        fig_count = px.pie(
+            district_count,
+            values='매물 수',
+            names='구',
+            title='구별 매물 수 (상위 10개)',
+            color_discrete_sequence=px.colors.qualitative.Set3
+        )
+        fig_count.update_layout(
+            font=dict(size=18, family="Arial, sans-serif", color="#000000"),
+            title_font=dict(
+                size=24, family="Arial, sans-serif", color="#000000"),
+            paper_bgcolor='white',
+            height=450
+        )
+        fig_count.update_traces(textfont=dict(size=16, color="#000000"),
+                                hoverlabel=dict(
+            bgcolor="white",  # 🔥 호버 배경 흰색
+            font_size=16,  # 🔥 글자 크기
+            font_family="Arial",
+            font_color="black",  # 🔥 글자 검은색
+            bordercolor="#cccccc"  # 🔥 테두리 색상
+        ))
+        st.plotly_chart(fig_count, use_container_width=True,
+                        config={'displayModeBar': False})
+
+    # 3. 평형별 분석
+    # 평형별 평균 VFM
+    with col1:
+        size_avg = df_filtered.groupby('size_category')[
+            'custom_vfm'].mean().reset_index()
+        size_avg.columns = ['평형', '평균 VFM']
+
+        size_order = ['초소형', '소형', '중형', '대형']
+        size_avg['평형'] = pd.Categorical(
+            size_avg['평형'], categories=size_order, ordered=True)
+        size_avg = size_avg.sort_values('평형')
+
+        fig_size = px.bar(
+            size_avg,
+            x='평형',
+            y='평균 VFM',
+            title='평형별 평균 VFM',
+            labels={'평형': '평형', '평균 VFM': '평균 VFM'},
+            color='평균 VFM',
+            color_continuous_scale='Blues'
+        )
+        fig_size.update_layout(
+            font=dict(size=18, family="Arial, sans-serif", color="#000000"),
+            title_font=dict(
+                size=26, family="Arial, sans-serif", color="#000000"),
+            xaxis_title_font=dict(size=20, color="#000000"),
+            yaxis_title_font=dict(size=20, color="#000000"),
+            xaxis=dict(
+                tickfont=dict(size=18, color="#000000"),
+                title_standoff=15,
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            yaxis=dict(
+                tickfont=dict(size=18, color="#000000"),
+                title_standoff=15,
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            showlegend=False,
+            height=450
+        )
+        fig_size.update_traces(
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="#cccccc"
+            )
+        )
+        st.plotly_chart(fig_size, use_container_width=True,
+                        config={'displayModeBar': False})
+
+    # 평형별 매물 수
+    with col2:
+        size_count = df_filtered['size_category'].value_counts().reset_index()
+        size_count.columns = ['평형', '매물 수']
+
+        fig_size_count = px.bar(
+            size_count,
+            x='평형',
+            y='매물 수',
+            title='평형별 매물 수',
+            labels={'평형': '평형', '매물 수': '매물 수'},
+            color_discrete_sequence=['#764ba2']
+        )
+        fig_size_count.update_layout(
+            font=dict(size=18, family="Arial, sans-serif", color="#000000"),
+            title_font=dict(
+                size=26, family="Arial, sans-serif", color="#000000"),
+            xaxis_title_font=dict(size=20, color="#000000"),
+            yaxis_title_font=dict(size=20, color="#000000"),
+            xaxis=dict(
+                tickfont=dict(size=18, color="#000000"),
+                title_standoff=15,
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            yaxis=dict(
+                tickfont=dict(size=18, color="#000000"),
+                title_standoff=15,
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            height=450
+        )
+        fig_size_count.update_traces(
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=16,
+                font_family="Arial",
+                font_color="black",
+                bordercolor="#cccccc"
+            )
+        )
+        st.plotly_chart(fig_size_count, use_container_width=True,
+                        config={'displayModeBar': False})
+
+    # 4. 가격 분석
+    st.subheader("💰 가격 분석")
+
+    if contract_type == 'monthly':
+        if 'deposit_amount' in df_filtered.columns:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                sample_df = df_filtered.sample(min(1000, len(df_filtered)))
+
+                fig_deposit = px.scatter(
+                    sample_df,
+                    x='deposit_amount',
+                    y='custom_vfm',
+                    title='보증금 vs VFM',
+                    labels={
+                        'deposit_amount': '보증금 (만원)', 'custom_vfm': 'VFM 지수'},
+                    color='custom_vfm',
+                    color_continuous_scale='RdYlGn',
+                    opacity=0.7
+                )
+                fig_deposit.update_traces(
+                    marker=dict(size=10, line=dict(width=0.5, color='white')),
+                    hoverlabel=dict(
+                        bgcolor="white",  # 🔥 배경 흰색
+                        font_size=16,  # 🔥 글자 크기
+                        font_family="Arial",
+                        font_color="black",  # 🔥 글자 검은색
+                        bordercolor="#cccccc"  # 🔥 테두리 색상
+                    )
+                )
+                fig_deposit.update_layout(
+                    font=dict(size=18, family="Arial, sans-serif",
+                              color="#000000"),
+                    title_font=dict(
+                        size=26, family="Arial, sans-serif", color="#000000"),
+                    xaxis_title_font=dict(size=20, color="#000000"),
+                    yaxis_title_font=dict(size=20, color="#000000"),
+                    xaxis=dict(
+                        tickfont=dict(size=18, color="#000000"),
+                        title_standoff=15,
+                        showgrid=True,
+                        gridcolor='rgba(0,0,0,0.1)',
+                        range=[sample_df['deposit_amount'].min() * 0.95,
+                               sample_df['deposit_amount'].max() * 1.05]
+                    ),
+                    yaxis=dict(
+                        tickfont=dict(size=18, color="#000000"),
+                        title_standoff=15,
+                        showgrid=True,
+                        gridcolor='rgba(0,0,0,0.1)',
+                        range=[sample_df['custom_vfm'].min() * 0.9,
+                               sample_df['custom_vfm'].max() * 1.1]
+                    ),
+                    plot_bgcolor='white',
+                    paper_bgcolor='white',
+                    height=450,
+                    coloraxis_colorbar=dict(
+                        title=dict(text="VFM", font=dict(
+                            size=18, color="#000000")),
+                        tickfont=dict(size=16, color="#000000"),
+                        thickness=25,
+                        len=0.7,
+                        x=1.02
+                    )
+                )
+                st.plotly_chart(fig_deposit, use_container_width=True, config={
+                                'displayModeBar': False})
+
+            with col2:
+                if 'monthly_rent' in df_filtered.columns:
+                    sample_df = df_filtered.sample(min(1000, len(df_filtered)))
+
+                    fig_rent = px.scatter(
+                        sample_df,
+                        x='monthly_rent',
+                        y='custom_vfm',
+                        title='월세 vs VFM',
+                        labels={
+                            'monthly_rent': '월세 (만원)', 'custom_vfm': 'VFM 지수'},
+                        color='custom_vfm',
+                        color_continuous_scale='RdYlGn',
+                        opacity=0.7
+                    )
+                    fig_rent.update_traces(
+                        marker=dict(size=10, line=dict(
+                            width=0.5, color='white')),
+                        hoverlabel=dict(
+                            bgcolor="white",  # 🔥 배경 흰색
+                            font_size=16,  # 🔥 글자 크기
+                            font_family="Arial",
+                            font_color="black",  # 🔥 글자 검은색
+                            bordercolor="#cccccc"  # 🔥 테두리 색상
+                        )
+                    )
+                    fig_rent.update_layout(
+                        font=dict(size=18, family="Arial, sans-serif",
+                                  color="#000000"),
+                        title_font=dict(
+                            size=26, family="Arial, sans-serif", color="#000000"),
+                        xaxis_title_font=dict(size=20, color="#000000"),
+                        yaxis_title_font=dict(size=20, color="#000000"),
+                        xaxis=dict(
+                            tickfont=dict(size=18, color="#000000"),
+                            title_standoff=15,
+                            showgrid=True,
+                            gridcolor='rgba(0,0,0,0.1)',
+                            range=[sample_df['monthly_rent'].min() * 0.95,
+                                   sample_df['monthly_rent'].max() * 1.05]
+                        ),
+                        yaxis=dict(
+                            tickfont=dict(size=18, color="#000000"),
+                            title_standoff=15,
+                            showgrid=True,
+                            gridcolor='rgba(0,0,0,0.1)',
+                            range=[sample_df['custom_vfm'].min() * 0.9,
+                                   sample_df['custom_vfm'].max() * 1.1]
+                        ),
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        height=450,
+                        coloraxis_colorbar=dict(
+                            title=dict(text="VFM", font=dict(
+                                size=18, color="#000000")),
+                            tickfont=dict(size=16, color="#000000"),
+                            thickness=25,
+                            len=0.7,
+                            x=1.02
+                        )
+                    )
+                    st.plotly_chart(fig_rent, use_container_width=True, config={
+                                    'displayModeBar': False})
+    else:
+        if 'total_deposit_median' in df_filtered.columns:
+            sample_df = df_filtered.sample(min(1000, len(df_filtered)))
+
+            fig_jeonse = px.scatter(
+                sample_df,
+                x='total_deposit_median',
+                y='custom_vfm',
+                title='전세가 vs VFM',
+                labels={
+                    'total_deposit_median': '전세가 (만원)', 'custom_vfm': 'VFM 지수'},
+                color='custom_vfm',
+                color_continuous_scale='RdYlGn',
+                opacity=0.7
+            )
+            fig_jeonse.update_traces(
+                marker=dict(size=10, line=dict(width=0.5, color='white')),
+                hoverlabel=dict(
+                    bgcolor="white",  # 🔥 배경 흰색
+                    font_size=16,  # 🔥 글자 크기
+                    font_family="Arial",
+                    font_color="black",  # 🔥 글자 검은색
+                    bordercolor="#cccccc"  # 🔥 테두리 색상
+                )
+            )
+            fig_jeonse.update_layout(
+                font=dict(size=18, family="Arial, sans-serif",
+                          color="#000000"),
+                title_font=dict(
+                    size=26, family="Arial, sans-serif", color="#000000"),
+                xaxis_title_font=dict(size=20, color="#000000"),
+                yaxis_title_font=dict(size=20, color="#000000"),
+                xaxis=dict(
+                    tickfont=dict(size=18, color="#000000"),
+                    title_standoff=15,
+                    showgrid=True,
+                    gridcolor='rgba(0,0,0,0.1)',
+                    range=[sample_df['total_deposit_median'].min() * 0.95,
+                           sample_df['total_deposit_median'].max() * 1.05]
+                ),
+                yaxis=dict(
+                    tickfont=dict(size=18, color="#000000"),
+                    title_standoff=15,
+                    showgrid=True,
+                    gridcolor='rgba(0,0,0,0.1)',
+                    range=[sample_df['custom_vfm'].min() * 0.9,
+                           sample_df['custom_vfm'].max() * 1.1]
+                ),
+                plot_bgcolor='white',
+                paper_bgcolor='white',
+                height=450,
+                coloraxis_colorbar=dict(
+                    title=dict(text="VFM", font=dict(
+                        size=18, color="#000000")),
+                    tickfont=dict(size=16, color="#000000"),
+                    thickness=25,
+                    len=0.7,
+                    x=1.02
+                )
+            )
+            st.plotly_chart(fig_jeonse, use_container_width=True,
+                            config={'displayModeBar': False})
+
+    # 5. 인프라 지표 상관관계
+    st.subheader("📈 인프라 지표와 VFM")
+
+    infra_cols = ['trans_index', 'conv_index',
+                  'env_index', 'safety_score_scaled']
+    infra_names = ['교통', '편의', '환경', '안전']
+
+    col1, col2 = st.columns(2)
+
+    for idx, (col_name, display_name) in enumerate(zip(infra_cols, infra_names)):
+        if col_name in df_filtered.columns:
+            sample_df = df_filtered.sample(min(1000, len(df_filtered)))
+
+            if idx % 2 == 0:
+                with col1:
+                    fig_infra = px.scatter(
+                        sample_df,
+                        x=col_name,
+                        y='custom_vfm',
+                        title=f'{display_name} 지표 vs VFM',
+                        labels={col_name: f'{display_name} 지표',
+                                'custom_vfm': 'VFM 지수'},
+                        color='custom_vfm',
+                        color_continuous_scale='RdYlGn',
+                        opacity=0.7
+                    )
+                    fig_infra.update_traces(
+                        marker=dict(size=9, line=dict(
+                            width=0.5, color='white')),
+                        hoverlabel=dict(
+                            bgcolor="white",  # 🔥 배경 흰색
+                            font_size=16,  # 🔥 글자 크기
+                            font_family="Arial",
+                            font_color="black",  # 🔥 글자 검은색
+                            bordercolor="#cccccc"  # 🔥 테두리 색상
+                        )
+                    )
+                    fig_infra.update_layout(
+                        font=dict(size=17, family="Arial, sans-serif",
+                                  color="#000000"),
+                        title_font=dict(
+                            size=24, family="Arial, sans-serif", color="#000000"),
+                        xaxis_title_font=dict(size=19, color="#000000"),
+                        yaxis_title_font=dict(size=19, color="#000000"),
+                        xaxis=dict(
+                            tickfont=dict(size=17, color="#000000"),
+                            title_standoff=15,
+                            showgrid=True,
+                            gridcolor='rgba(0,0,0,0.1)',
+                            range=[sample_df[col_name].min() * 0.95,
+                                   sample_df[col_name].max() * 1.05]
+                        ),
+                        yaxis=dict(
+                            tickfont=dict(size=17, color="#000000"),
+                            title_standoff=15,
+                            showgrid=True,
+                            gridcolor='rgba(0,0,0,0.1)',
+                            range=[sample_df['custom_vfm'].min() * 0.9,
+                                   sample_df['custom_vfm'].max() * 1.1]
+                        ),
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        height=400,
+                        coloraxis_colorbar=dict(
+                            title=dict(text="VFM", font=dict(
+                                size=17, color="#000000")),
+                            tickfont=dict(size=15, color="#000000"),
+                            thickness=22,
+                            len=0.7,
+                            x=1.02
+                        )
+                    )
+                    st.plotly_chart(fig_infra, use_container_width=True, config={
+                                    'displayModeBar': False})
+            else:
+                with col2:
+                    fig_infra = px.scatter(
+                        sample_df,
+                        x=col_name,
+                        y='custom_vfm',
+                        title=f'{display_name} 지표 vs VFM',
+                        labels={col_name: f'{display_name} 지표',
+                                'custom_vfm': 'VFM 지수'},
+                        color='custom_vfm',
+                        color_continuous_scale='RdYlGn',
+                        opacity=0.7
+                    )
+                    fig_infra.update_traces(
+                        marker=dict(size=9, line=dict(
+                            width=0.5, color='white')),
+                        hoverlabel=dict(
+                            bgcolor="white",  # 🔥 배경 흰색
+                            font_size=16,  # 🔥 글자 크기
+                            font_family="Arial",
+                            font_color="black",  # 🔥 글자 검은색
+                            bordercolor="#cccccc"  # 🔥 테두리 색상
+                        )
+                    )
+                    fig_infra.update_layout(
+                        font=dict(size=17, family="Arial, sans-serif",
+                                  color="#000000"),
+                        title_font=dict(
+                            size=24, family="Arial, sans-serif", color="#000000"),
+                        xaxis_title_font=dict(size=19, color="#000000"),
+                        yaxis_title_font=dict(size=19, color="#000000"),
+                        xaxis=dict(
+                            tickfont=dict(size=17, color="#000000"),
+                            title_standoff=15,
+                            showgrid=True,
+                            gridcolor='rgba(0,0,0,0.1)',
+                            range=[sample_df[col_name].min() * 0.95,
+                                   sample_df[col_name].max() * 1.05]
+                        ),
+                        yaxis=dict(
+                            tickfont=dict(size=17, color="#000000"),
+                            title_standoff=15,
+                            showgrid=True,
+                            gridcolor='rgba(0,0,0,0.1)',
+                            range=[sample_df['custom_vfm'].min() * 0.9,
+                                   sample_df['custom_vfm'].max() * 1.1]
+                        ),
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        height=400,
+                        coloraxis_colorbar=dict(
+                            title=dict(text="VFM", font=dict(
+                                size=17, color="#000000")),
+                            tickfont=dict(size=15, color="#000000"),
+                            thickness=22,
+                            len=0.7,
+                            x=1.02
+                        )
+                    )
+                    st.plotly_chart(fig_infra, use_container_width=True, config={
+                                    'displayModeBar': False})
+
+
 def main():
     st.markdown("""
         <div class='header-container'>
             <h1 class='header-title'>🏠 Seoul Real Estate VFM Search</h1>
-            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 11.2 (최종) | Updated: 2026-02</p>
+            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 11.3 (시각화 추가) | Updated: 2026-02</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -632,6 +1174,16 @@ def main():
     col_left, col_right = st.columns([1, 2.5])
 
     with col_left:
+        # ✅ 탭 추가 (상단)
+        view_tab = st.radio(
+            "보기 모드",
+            options=['🗺️ 지도', '📊 시각화'],
+            horizontal=True,
+            label_visibility='collapsed'
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
         st.markdown("""
             <div class='panel-section'>
                 <div class='section-title'><span class='section-icon'>📋</span><span>계약 유형</span></div>
@@ -646,40 +1198,44 @@ def main():
         )
         st.session_state.contract_type = contract_type
 
-        st.markdown("""
-            <div class='panel-section'>
-                <div class='section-title'><span class='section-icon'>🗺️</span><span>지도 설정</span></div>
-            </div>
-        """, unsafe_allow_html=True)
+        # 지도 설정 (지도 탭에서만 표시)
+        if view_tab == '🗺️ 지도':
+            st.markdown("""
+                <div class='panel-section'>
+                    <div class='section-title'><span class='section-icon'>🗺️</span><span>지도 설정</span></div>
+                </div>
+            """, unsafe_allow_html=True)
 
-        map_type = st.radio(
-            "지도 표시 방식",
-            options=['marker', 'heatmap'],
-            format_func=lambda x: '📍 마커' if x == 'marker' else '🔥 히트맵',
-            label_visibility='collapsed'
-        )
-
-        if map_type == 'marker':
-            st.markdown("**📊 VFM 정렬**")
-            sort_order = st.radio(
-                "정렬 순서",
-                options=['desc', 'asc'],
-                format_func=lambda x: '⬇️ 높은 순 (추천)' if x == 'desc' else '⬆️ 낮은 순',
-                label_visibility='collapsed',
-                help="VFM이 높은 매물부터 보려면 '높은 순'을 선택하세요"
+            map_type = st.radio(
+                "지도 표시 방식",
+                options=['marker', 'heatmap'],
+                format_func=lambda x: '📍 마커' if x == 'marker' else '🔥 히트맵',
+                label_visibility='collapsed'
             )
 
-            st.markdown("**📍 마커 표시 개수**")
-            marker_limit = st.slider(
-                "마커 개수",
-                min_value=50,
-                max_value=1000,
-                value=500,
-                step=50,
-                label_visibility='collapsed',
-                help="선택한 정렬 순서대로 표시됩니다."
-            )
+            if map_type == 'marker':
+                st.markdown("**📊 VFM 정렬**")
+                sort_order = st.radio(
+                    "정렬 순서",
+                    options=['desc', 'asc'],
+                    format_func=lambda x: '⬇️ 높은 순 (추천)' if x == 'desc' else '⬆️ 낮은 순',
+                    label_visibility='collapsed'
+                )
+
+                st.markdown("**📍 마커 표시 개수**")
+                marker_limit = st.slider(
+                    "마커 개수",
+                    min_value=50,
+                    max_value=1000,
+                    value=500,
+                    step=50,
+                    label_visibility='collapsed'
+                )
+            else:
+                marker_limit = 500
+                sort_order = 'desc'
         else:
+            map_type = 'marker'
             marker_limit = 500
             sort_order = 'desc'
 
@@ -732,12 +1288,10 @@ def main():
                 "구 선택",
                 options=district_options,
                 default=['전체'],
-                label_visibility='collapsed',
-                help="여러 구를 선택할 수 있습니다."
+                label_visibility='collapsed'
             )
         else:
             selected_districts = ['전체']
-            st.warning("⚠️ 구 정보를 불러올 수 없습니다.")
 
         st.markdown("""
             <div class='panel-section'>
@@ -748,23 +1302,18 @@ def main():
         if not temp_df.empty and 'size_category' in temp_df.columns:
             available_sizes = temp_df['size_category'].dropna(
             ).unique().tolist()
-
-            # 평형 순서 정렬
             size_order = ['초소형', '소형', '중형', '대형']
             available_sizes = [s for s in size_order if s in available_sizes]
-
             size_options = ['전체'] + available_sizes
 
             selected_sizes = st.multiselect(
                 "평형 선택",
                 options=size_options,
                 default=['전체'],
-                label_visibility='collapsed',
-                help="여러 평형을 선택할 수 있습니다."
+                label_visibility='collapsed'
             )
         else:
             selected_sizes = ['전체']
-            st.warning("⚠️ 평형 정보를 불러올 수 없습니다.")
 
         st.markdown("""
             <div class='panel-section'>
@@ -797,17 +1346,14 @@ def main():
             else:
                 df_filtered = df.copy()
 
-                # 구 필터
                 if '전체' not in selected_districts and len(selected_districts) > 0:
                     df_filtered = df_filtered[df_filtered['district'].isin(
                         selected_districts)]
 
-                # 평형 필터
                 if '전체' not in selected_sizes and len(selected_sizes) > 0:
                     df_filtered = df_filtered[df_filtered['size_category'].isin(
                         selected_sizes)]
 
-                # 가격 필터
                 if contract_type == 'monthly':
                     if 'deposit_amount' in df_filtered.columns and 'monthly_rent' in df_filtered.columns:
                         df_filtered = df_filtered[
@@ -827,7 +1373,6 @@ def main():
                 df_filtered = df_filtered.reset_index(drop=True)
 
                 if len(df_filtered) > 0:
-                    # VFM 등급별 분포
                     orange_count = len(df_filtered[(df_filtered['custom_vfm'] >= 0.5) & (
                         df_filtered['custom_vfm'] < 1.0)])
                     blue_count = len(df_filtered[(df_filtered['custom_vfm'] >= 1.0) & (
@@ -874,7 +1419,6 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # 평형별 분포
                     if 'size_category' in df_filtered.columns:
                         st.write("### 📏 평형별 분포")
                         col1, col2, col3, col4 = st.columns(4)
@@ -895,122 +1439,25 @@ def main():
                             count = size_counts.get('대형', 0)
                             st.metric("🏰 대형", f"{count:,}개", delta="85㎡+")
 
-                if map_type == 'marker' and len(df_filtered) > marker_limit:
-                    sort_label = "높은" if sort_order == "desc" else "낮은"
-                    st.warning(f"""
-                    ⚠️ **마커 표시 제한**
-                    
-                    검색 결과 **{len(df_filtered):,}건** 중 **VFM {sort_label} 순 {marker_limit}개**만 표시됩니다.
-                    
-                    💡 전체를 보려면: 마커 개수를 늘리거나 히트맵 모드로 전환하세요.
-                    """)
-
-                st.info("""
-                📐 **VFM 계산 방법**
-                
-                **VFM = 미래 예상 가격 ÷ 현재 가격**
-                
-                - AI 모델 기반 12개월 후 가격 예측
-                - 서울 전체 기준 절대 평가
-                - VFM > 1.0: 상승 예상 (저평가)
-                - VFM < 1.0: 하락 예상 (고평가)
-                """)
-
                 st.markdown("<br>", unsafe_allow_html=True)
-                folium_map = create_map(
-                    df_filtered, map_type, contract_type, marker_limit, sort_order, vfm_grades)
-                st_folium(folium_map, width=None,
-                          height=600, returned_objects=[])
 
-                if len(df_filtered) > 0:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    st.subheader("📋 검색 결과 (상위 100개)")
+                # ✅ 탭에 따라 다른 내용 표시
+                if view_tab == '🗺️ 지도':
+                    if map_type == 'marker' and len(df_filtered) > marker_limit:
+                        sort_label = "높은" if sort_order == "desc" else "낮은"
+                        st.warning(
+                            f"⚠️ 검색 결과 **{len(df_filtered):,}건** 중 **VFM {sort_label} 순 {marker_limit}개**만 표시됩니다.")
 
-                    cols = ['grid_id', 'district',
-                            'size_category', 'custom_vfm']
+                    folium_map = create_map(
+                        df_filtered, map_type, contract_type, marker_limit, sort_order, vfm_grades)
+                    st_folium(folium_map, width=None,
+                              height=600, returned_objects=[])
 
-                    if contract_type == 'monthly':
-                        if 'deposit_amount' in df_filtered.columns:
-                            cols.append('deposit_amount')
-                        if 'monthly_rent' in df_filtered.columns:
-                            cols.append('monthly_rent')
-                    else:
-                        if 'total_deposit_median' in df_filtered.columns:
-                            cols.append('total_deposit_median')
-                        if 'future_price' in df_filtered.columns:
-                            cols.append('future_price')
-                        if 'price_change_pct' in df_filtered.columns:
-                            cols.append('price_change_pct')
-
-                    cols.extend(['trans_index', 'conv_index', 'env_index',
-                                'safety_score_scaled', 'grid_crime_index'])
-                    cols = [c for c in cols if c in df_filtered.columns]
-
-                    df_show = df_filtered[cols].head(100).sort_values(
-                        'custom_vfm', ascending=False)
-
-                    rename_dict = {
-                        'grid_id': '그리드',
-                        'district': '구',
-                        'size_category': '평형',
-                        'custom_vfm': 'VFM 지수',
-                        'deposit_amount': '보증금(만원)',
-                        'monthly_rent': '월세(만원)',
-                        'total_deposit_median': '전세(만원)',
-                        'future_price': '예상가(만원)',
-                        'price_change_pct': '변화율(%)',
-                        'trans_index': '교통',
-                        'conv_index': '편의',
-                        'env_index': '환경',
-                        'safety_score_scaled': '안전',
-                        'grid_crime_index': '치안'
-                    }
-                    df_show = df_show.rename(columns=rename_dict)
-
-                    st.dataframe(df_show, height=400)
-
-                    csv = df_show.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label="📥 CSV 다운로드",
-                        data=csv,
-                        file_name=f'vfm_search_{contract_type}_{pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")}.csv',
-                        mime='text/csv'
-                    )
-                else:
-                    st.warning("⚠️ 검색 조건에 맞는 데이터가 없습니다.")
+                else:  # 시각화 탭
+                    create_visualizations(df_filtered, contract_type)
 
         else:
             st.info("🔍 왼쪽 패널에서 검색 조건을 설정한 후 '검색하기' 버튼을 눌러주세요.")
-
-            st.markdown("""
-            ### 📖 VFM 지수란?
-            
-            **VFM (Value For Money) = 미래 예상 가격 ÷ 현재 가격**
-            
-            - AI 모델 기반 12개월 후 가격 예측
-            - **VFM > 1.0**: 저평가 (투자 가치 높음 ↑)
-            - **VFM = 1.0**: 적정 가격
-            - **VFM < 1.0**: 고평가 (투자 주의)
-            
-            ---
-            
-            ### 📊 VFM 등급 기준 (3단계)
-            
-            - **2.0 이상**: 🟢 최우수 (강력 추천)
-            - **1.0 ~ 2.0**: 🔵 우수 (투자 고려)
-            - **0.5 ~ 1.0**: 🟠 보통 (신중 검토)
-            
-            ※ VFM 0.5 미만 데이터는 필터링되어 제외되었습니다.
-            
-            ---
-            
-            ### 📏 평형 기준
-            
-            - **초소형**: 40㎡ 미만 (약 12평)
-            - **소형**: 40~60㎡ (약 12~18평)
-            - **중형**: 60~85㎡ (약 18~26평)
-            - **대형**: 85㎡ 이상 (약 26평 이상)
-            """)
 
 
 if __name__ == "__main__":
