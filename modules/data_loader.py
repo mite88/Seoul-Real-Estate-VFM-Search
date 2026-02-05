@@ -1,7 +1,7 @@
 """
 Data Loader Module for Seoul Real Estate VFM Analysis
 서울 부동산 VFM 분석을 위한 데이터 로더 모듈
-Version 12.0.0 - CSV 구조 변경 대응
+Version 13.0.0 - 입지 지표 5개 + 총점 구조
 """
 
 import pandas as pd
@@ -19,7 +19,7 @@ def load_grid_coordinates():
         grid_df = pd.read_csv('data/seoul_500m_grid_with_sggnm.csv')
         grid_df['grid_id'] = grid_df['grid_id'].astype(str).str.strip()
         print(f"✅ 그리드 좌표 로드 완료: {len(grid_df):,}건")
-        return grid_df[['grid_id', 'center_lat', 'center_lon']]
+        return grid_df[['grid_id', 'center_lat', 'center_lon', 'sggnm']]
     except Exception as e:
         st.error(f"❌ 그리드 좌표 파일 로드 실패: {e}")
         return pd.DataFrame()
@@ -29,6 +29,7 @@ def load_grid_coordinates():
 def load_vfm_data(contract_type='monthly'):
     """
     VFM 데이터 로드 및 전처리
+    Version 13.0.0 - 입지 지표 5개 + 총점
     """
     try:
         # 파일 경로 설정
@@ -51,7 +52,7 @@ def load_vfm_data(contract_type='monthly'):
         grid_coords = load_grid_coordinates()
         if not grid_coords.empty:
             df = df.merge(
-                grid_coords,
+                grid_coords[['grid_id', 'center_lat', 'center_lon']],
                 on='grid_id',
                 how='left'
             )
@@ -120,12 +121,16 @@ def load_vfm_data(contract_type='monthly'):
         else:
             df['avg_area'] = 0
 
-        # 10. 예측 가격 처리 (pred_12m → future_price)
-        if 'pred_12m' in df.columns:
-            df['future_price'] = pd.to_numeric(
-                df['pred_12m'], errors='coerce').fillna(0)
-        else:
-            df['future_price'] = 0
+        # 10. 예측 가격 처리 (3m, 6m, 9m, 12m)
+        pred_cols = ['pred_3m', 'pred_6m', 'pred_9m', 'pred_12m']
+        for col in pred_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            else:
+                df[col] = 0
+
+        # future_price = pred_12m
+        df['future_price'] = df['pred_12m']
 
         # 11. 가격 변화율 계산
         df['price_change_pct'] = 0.0
@@ -142,11 +147,15 @@ def load_vfm_data(contract_type='monthly'):
         else:
             df['size_category'] = '미분류'
 
-        # 13. 인프라 지표 처리
+        # 13. 입지 지표 처리 (5개 + 총점) - 치안(grid_crime_index) 제외
         infra_cols = [
-            'trans_index', 'conv_index', 'env_index',
-            'safety_score_scaled', 'grid_crime_index',
-            'hospital_index', 'total_infra_score', 'infra_score'
+            'trans_index',           # 교통
+            'conv_index',            # 편의
+            'env_index',             # 환경
+            'hospital_index',        # 의료
+            'safety_score_scaled',   # 안전
+            'total_infra_score',     # 총점
+            'infra_score'            # 총점 (대체)
         ]
 
         for col in infra_cols:

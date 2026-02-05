@@ -1,9 +1,9 @@
 """
 Seoul Real Estate VFM Search Application
-Final Version 12.0.0 - CSV 구조 변경 대응
-
+Final Version 13.0.0 - 입지 지표 5개 
 주요 변경:
-- 월세: 전환보증금으로 표시 (deposit_amount, monthly_rent 삭제됨)
+- 입지 지표: 5개 (치안 제외)
+- 월세: 전환보증금으로 표시
 - 좌표: seoul_500m_grid_with_sggnm.csv에서 매핑
 """
 
@@ -274,8 +274,8 @@ def load_data_simple(contract_type):
         return pd.DataFrame()
 
 
-def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500, sort_order="desc", vfm_grades=None):
-    """지도 생성"""
+def create_map(df, map_type="marker", contract_type="monthly", marker_limit=100, sort_order="desc", vfm_grades=None):
+    """지도 생성 - 입지 지표 5개 """
 
     m = folium.Map(
         location=[37.5665, 126.9780],
@@ -315,17 +315,6 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                 combined_condition = combined_condition | condition
             df_valid = df_valid[combined_condition].copy()
             df_valid = df_valid.reset_index(drop=True)
-
-    vfm_stats = {}
-    if len(df_valid) > 0:
-        vfm_values = df_valid['custom_vfm'].dropna()
-        if len(vfm_values) > 0:
-            vfm_stats = {
-                'min': vfm_values.min(),
-                'max': vfm_values.max(),
-                'mean': vfm_values.mean(),
-                'median': vfm_values.median(),
-            }
 
     data_count = len(df_valid)
     display_count = min(
@@ -383,8 +372,8 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                 max_opacity=0.8,
                 radius=15,
                 blur=20,
-                gradient={0.0: 'red', 0.3: 'orange', 0.5: 'yellow',
-                          0.7: 'lime', 1.0: 'green'}  # ✅ 수정
+                gradient={0.0: 'red', 0.3: 'orange',
+                          0.5: 'yellow', 0.7: 'lime', 1.0: 'green'}
             ).add_to(m)
 
     # 마커
@@ -433,7 +422,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
 
             size_cat = row.get('size_category', '미분류')
 
-            # ✅ 가격 정보 (월세/전세 통합 - total_deposit_median 사용)
+            # 가격 정보
             current_price = row.get('total_deposit_median', 0)
             future_price = row.get('future_price', 0)
             price_change_pct = row.get('price_change_pct', 0)
@@ -471,7 +460,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                 </div>
             """
 
-            # 예측 정보 HTML (월세/전세 동일)
+            # 예측 정보 HTML
             if future_price > 0:
                 if price_change_pct > 0:
                     trend_color = '#d32f2f'
@@ -513,12 +502,12 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
             else:
                 prediction_html = ""
 
+            # ✅ 입지 지표 5개
             trans_val = row.get('trans_index', 0)
             conv_val = row.get('conv_index', 0)
             env_val = row.get('env_index', 0)
-            safety_val = row.get('safety_score_scaled', 0)
-            crime_val = row.get('grid_crime_index', 0)
             hospital_val = row.get('hospital_index', 0)
+            safety_val = row.get('safety_score_scaled', 0)
 
             popup_html = f"""
             <div style='width: 300px; font-family: "Segoe UI", Arial, sans-serif; position: relative;'>
@@ -559,15 +548,13 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
                         <div style='display: flex; justify-content: space-between; padding: 2px 0;'>
                             <span>🛡️ 안전</span><strong style='color: #667eea;'>{safety_val:.4f}</strong>
                         </div>
-                        <div style='display: flex; justify-content: space-between; padding: 2px 0;'>
-                            <span>🚨 치안</span><strong style='color: #667eea;'>{crime_val:.6f}</strong>
-                        </div>
+                       
                     </div>
                 </div>
             </div>
             """
 
-            # ✅ 툴팁 (월세/전세 통합)
+            # 툴팁
             if contract_type == 'monthly':
                 tooltip_text = f"VFM: {vfm:.3f} | {size_cat} | 전환보증금: {current_price:,.0f}만"
             else:
@@ -596,7 +583,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=500,
 
 
 def create_visualizations(df_filtered, contract_type):
-    """시각화 생성 - 예측 차트 추가 버전"""
+    """시각화 생성 - 8개 그래프"""
 
     if df_filtered.empty:
         st.warning("⚠️ 표시할 데이터가 없습니다.")
@@ -612,14 +599,13 @@ def create_visualizations(df_filtered, contract_type):
     # 공통 마진 설정
     common_margin = dict(l=60, r=60, t=80, b=60)
 
-    # 공통 호버 스타일 (검정 배경 + 흰색 글자)
+    # 공통 호버 스타일
     hover_style = dict(
         bgcolor="white",
-        font_size=14,  # 호버 글자 크기 조절
-        font_family="Arial"  # 폰트 통일
+        bordercolor="white"
     )
 
-    # 공통 진한 색상 팔레트
+    # 진한 색상 팔레트
     dark_colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
                    '#1abc9c', '#e67e22', '#34495e', '#16a085', '#c0392b']
 
@@ -650,6 +636,8 @@ def create_visualizations(df_filtered, contract_type):
     fig_hist.update_traces(hoverlabel=hover_style)
     st.plotly_chart(fig_hist, use_container_width=True,
                     config={'displayModeBar': False})
+
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # 2-3. 구별 분석
     st.subheader("🗺️ 구별 분석")
@@ -714,6 +702,8 @@ def create_visualizations(df_filtered, contract_type):
         st.plotly_chart(fig_pie, use_container_width=True,
                         config={'displayModeBar': False})
 
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # 4. 평형별 평균 VFM
     st.subheader("📏 평형별 평균 VFM")
     size_avg = df_filtered.groupby('size_category')[
@@ -746,6 +736,8 @@ def create_visualizations(df_filtered, contract_type):
     fig_size.update_traces(hoverlabel=hover_style)
     st.plotly_chart(fig_size, use_container_width=True,
                     config={'displayModeBar': False})
+
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # 5. 가격 vs VFM (산점도)
     st.subheader(f"💰 {price_label} vs VFM")
@@ -780,6 +772,8 @@ def create_visualizations(df_filtered, contract_type):
         )
         st.plotly_chart(fig_price, use_container_width=True,
                         config={'displayModeBar': False})
+
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # 6. 인프라 종합 vs VFM (산점도)
     st.subheader("🏗️ 인프라 종합 점수 vs VFM")
@@ -960,7 +954,7 @@ def main():
     st.markdown("""
         <div class='header-container'>
             <h1 class='header-title'>🏠 Seoul Real Estate VFM Search</h1>
-            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 12.0 | Updated: 2026-02</p>
+            <p class='header-subtitle'>500m 그리드 기반 부동산 가치 분석 시스템 | Version 13.0 | Updated: 2026-02</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1023,16 +1017,16 @@ def main():
                     "마커 개수",
                     min_value=50,
                     max_value=1000,
-                    value=500,
+                    value=100,
                     step=50,
                     label_visibility='collapsed'
                 )
             else:
-                marker_limit = 500
+                marker_limit = 100
                 sort_order = 'desc'
         else:
             map_type = 'marker'
-            marker_limit = 500
+            marker_limit = 100
             sort_order = 'desc'
 
         st.markdown("""
@@ -1117,7 +1111,7 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-        # ✅ 가격 필터링 (월세/전세 통합)
+        # 가격 필터링
         if contract_type == 'monthly':
             st.markdown("**전환보증금 범위**")
             st.caption("※ 월세를 보증금으로 전환한 금액")
@@ -1149,7 +1143,7 @@ def main():
                     df_filtered = df_filtered[df_filtered['size_category'].isin(
                         selected_sizes)]
 
-                # ✅ 가격 필터링 (월세/전세 통합)
+                # 가격 필터링
                 if 'total_deposit_median' in df_filtered.columns:
                     df_filtered = df_filtered[
                         (df_filtered['total_deposit_median'] >= price_range[0]) &
