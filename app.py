@@ -423,13 +423,12 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=100,
             size_cat = row.get('size_category', '미분류')
 
             # 가격 정보
+            size_cat = row.get('size_category', '미분류')
             current_price = row.get('total_deposit_median', 0)
             future_price = row.get('future_price', 0)
             price_change_pct = row.get('price_change_pct', 0)
-            avg_area = row.get('avg_area', 0)
-            rent_per_m2 = row.get('rent_per_m2', 0)
 
-            # 가격 라벨 설정
+            # NameError 해결을 위해 price_label을 여기서 정의합니다.
             if contract_type == 'monthly':
                 price_label = '전환보증금'
                 price_note = '<div style="font-size: 0.6rem; color: #888; margin-top: 2px;">※ 월세를 보증금으로 전환한 금액</div>'
@@ -447,16 +446,7 @@ def create_map(df, map_type="marker", contract_type="monthly", marker_limit=100,
                         <div style='font-size: 1.1rem; font-weight: 700; color: #1b5e20;'>{current_price:,.0f}만원</div>
                         {price_note}
                     </div>
-                    <div style='display: flex; gap: 6px; margin-top: 6px;'>
-                        <div style='flex: 1; background: #f3f4f6; padding: 4px 6px; border-radius: 4px;'>
-                            <div style='font-size: 0.65rem; color: #666;'>📐 평균면적</div>
-                            <div style='font-size: 0.85rem; font-weight: 600; color: #333;'>{avg_area:.1f}㎡</div>
-                        </div>
-                        <div style='flex: 1; background: #f3f4f6; padding: 4px 6px; border-radius: 4px;'>
-                            <div style='font-size: 0.65rem; color: #666;'>📊 ㎡당</div>
-                            <div style='font-size: 0.85rem; font-weight: 600; color: #333;'>{rent_per_m2:,.0f}원</div>
-                        </div>
-                    </div>
+                    
                 </div>
             """
 
@@ -1153,13 +1143,6 @@ def main():
                 df_filtered = df_filtered.reset_index(drop=True)
 
                 if len(df_filtered) > 0:
-                    # --- [실시간 통계 재계산] ---
-                    # 필터링된 결과 내에서 실제 평균 지표 계산
-                    avg_area_val = df_filtered['avg_area'].mean()
-                    avg_rent_m2_val = df_filtered['rent_per_m2'].mean()
-                    avg_vfm_val = df_filtered['custom_vfm'].mean()
-
-                    # 등급별 카운트
                     orange_count = len(df_filtered[(df_filtered['custom_vfm'] >= 0.5) & (
                         df_filtered['custom_vfm'] < 1.0)])
                     blue_count = len(df_filtered[(df_filtered['custom_vfm'] >= 1.0) & (
@@ -1167,26 +1150,6 @@ def main():
                     green_count = len(
                         df_filtered[df_filtered['custom_vfm'] >= 2.0])
 
-                    # 1. 상단 요약 대시보드 (선택된 조건의 평균치)
-                    st.markdown("### 📊 선택 조건 요약 분석")
-                    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-
-                    with m_col1:
-                        st.metric(
-                            "📍 검색 결과", f"{len(df_filtered):,}개", help="필터링된 총 매물 수")
-                    with m_col2:
-                        st.metric(
-                            "📐 평균 면적", f"{avg_area_val:.1f}㎡", help="선택된 매물들의 평균 전용면적")
-                    with m_col3:
-                        st.metric(
-                            "💰 ㎡당 임대료", f"{avg_rent_m2_val:,.0f}원", help="선택된 매물들의 ㎡당 평균 가격")
-                    with m_col4:
-                        st.metric(
-                            "📈 평균 VFM", f"{avg_vfm_val:.3f}", help="선택된 매물들의 평균 가성비 지수")
-
-                    st.markdown("---")
-
-                    # 2. VFM 등급별 분포 시각화 (카드형)
                     st.write("### 🎨 VFM 등급별 분포")
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -1226,41 +1189,42 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # 3. 평형별 세부 분포 (Metric)
                     if 'size_category' in df_filtered.columns:
-                        st.write("### 📏 평형별 상세 분포")
-                        sc1, sc2, sc3, sc4 = st.columns(4)
+                        st.write("### 📏 평형별 분포")
+                        col1, col2, col3, col4 = st.columns(4)
+
                         size_counts = df_filtered['size_category'].value_counts(
                         )
 
-                        with sc1:
-                            st.metric(
-                                "🏠 초소형", f"{size_counts.get('초소형', 0):,}개", delta="<40㎡", delta_color="off")
-                        with sc2:
-                            st.metric(
-                                "🏡 소형", f"{size_counts.get('소형', 0):,}개", delta="40~60㎡", delta_color="off")
-                        with sc3:
-                            st.metric(
-                                "🏘️ 중형", f"{size_counts.get('중형', 0):,}개", delta="60~85㎡", delta_color="off")
-                        with sc4:
-                            st.metric(
-                                "🏰 대형", f"{size_counts.get('대형', 0):,}개", delta="85㎡+", delta_color="off")
+                        with col1:
+                            count = size_counts.get('초소형', 0)
+                            st.metric("🏠 초소형", f"{count:,}개", delta="<40㎡")
+                        with col2:
+                            count = size_counts.get('소형', 0)
+                            st.metric("🏡 소형", f"{count:,}개", delta="40~60㎡")
+                        with col3:
+                            count = size_counts.get('중형', 0)
+                            st.metric("🏘️ 중형", f"{count:,}개", delta="60~85㎡")
+                        with col4:
+                            count = size_counts.get('대형', 0)
+                            st.metric("🏰 대형", f"{count:,}개", delta="85㎡+")
 
-                    st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
 
-                    # 4. 결과 출력 (지도 또는 시각화)
-                    if view_tab == '🗺️ 지도':
-                        if map_type == 'marker' and len(df_filtered) > marker_limit:
-                            sort_label = "높은" if sort_order == "desc" else "낮은"
-                            st.warning(
-                                f"⚠️ 검색 결과 **{len(df_filtered):,}건** 중 **VFM {sort_label} 순 {marker_limit}개**만 표시됩니다.")
+                # 탭에 따라 다른 내용 표시
+                if view_tab == '🗺️ 지도':
+                    if map_type == 'marker' and len(df_filtered) > marker_limit:
+                        sort_label = "높은" if sort_order == "desc" else "낮은"
+                        st.warning(
+                            f"⚠️ 검색 결과 **{len(df_filtered):,}건** 중 **VFM {sort_label} 순 {marker_limit}개**만 표시됩니다.")
 
-                        folium_map = create_map(
-                            df_filtered, map_type, contract_type, marker_limit, sort_order, vfm_grades)
-                        st_folium(folium_map, width=None,
-                                  height=600, returned_objects=[])
-                    else:
-                        create_visualizations(df_filtered, contract_type)
+                    folium_map = create_map(
+                        df_filtered, map_type, contract_type, marker_limit, sort_order, vfm_grades)
+                    st_folium(folium_map, width=None,
+                              height=600, returned_objects=[])
+
+                else:  # 시각화 탭
+                    create_visualizations(df_filtered, contract_type)
 
         else:
             st.info("🔍 왼쪽 패널에서 검색 조건을 설정한 후 '검색하기' 버튼을 눌러주세요.")
